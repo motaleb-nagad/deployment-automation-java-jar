@@ -1,0 +1,55 @@
+// Wire types mirroring the backend DTOs (com.nagad.deploy.dto.Dtos).
+
+export interface ServiceCell {
+  svc: string; host: string; status: string; hash: string; uptime: string;
+  pid: string; ip: string; jar: string; instances: number; lastDeployed: string;
+}
+export interface GroupView {
+  key: string; cmd: string | null; zone: string; tier: string;
+  hosts: string[]; cells: ServiceCell[]; issues: string[];
+}
+export interface AttentionView {
+  kind: string; title: string; sub: string; desc: string;
+  group: string; svc: string; host: string;
+}
+export interface FleetView {
+  collectedAt: string; age: string; incident: boolean;
+  hostsTotal: number; servicesTotal: number; instancesTotal: number;
+  servicesDown: number; driftGroups: number; restarts: number; unknowns: number;
+  attention: AttentionView[]; groups: GroupView[];
+}
+
+export interface PromotionView {
+  id: string; app: string; group: string; srcHost: string; jar: string;
+  hash: string; prevHash: string | null; branch: string | null; size: string | null;
+  requestedBy: string; requestedAt: string; status: string;
+  decidedBy: string | null; decidedAt: string | null; note: string | null;
+}
+
+export interface StagingSource {
+  key: string; host: string; ip: string; apps: string[];
+}
+
+export interface DeployApp { key: string; jar: string; approved: boolean; approvedHash: string | null; }
+export interface DeployGroup {
+  key: string; cmd: string; zone: string; tier: string; hosts: string[]; apps: DeployApp[];
+}
+
+export interface DeploymentView {
+  id: string; promotionId: string | null; group: string; hosts: string; apps: string;
+  actions: string; startedBy: string; startedAt: string; duration: string | null;
+  result: string | null; beforeAfter: string | null; logExcerpt: string | null;
+}
+
+export interface RegistryRow {
+  app: string; group: string; jar: string; prodHash: string | null;
+  latestHash: string | null; latestStatus: string; latestBy: string | null; updatedAt: string;
+}
+
+export interface AdminRow {
+  username: string; name: string; role: string; scope: string; r: boolean; w: boolean; x: boolean;
+}
+
+export interface AuditRow {
+  ts: string; actor: string; verb: string; target: string; detail: string | null;
+}

@@ -1,0 +1,53 @@
+# Local full-stack: Postgres + Spring Boot API + nginx-served SPA.
+#   docker compose up --build
+#   open http://localhost:8088   (any account, password 4+ chars, OTP shown on screen)
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: registrydb
+      POSTGRES_USER: registry
+      POSTGRES_PASSWORD: registry
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U registry -d registrydb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/registrydb
+      DB_USER: registry
+      DB_PASSWORD: registry
+      CORS_ORIGINS: http://localhost:8088
+      # Demo mode: no live SMTP relay, ansible runs are simulated. Flip to false when
+      # the jump host + relay are wired up.
+      MAIL_SIMULATE: "true"
+      ANSIBLE_SIMULATE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: http://backend:8080
+    ports:
+      - "8088:80"
+
+volumes:
+  db-data:

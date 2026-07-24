@@ -1,0 +1,76 @@
+/* Modernist design system — dark console interpretation.
+   Token values are lifted verbatim from the design system's styles.css so the app
+   matches the prototype. The console runs the neutral ramp inverted: --color-text is
+   the page ground, the neutral ramp reads light-on-dark. Zero radius, 2px rules,
+   flush-left, Archivo throughout. Colour is semantic only. */
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap');
+
+:root {
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201e1d;
+  --color-accent: #ec3013;
+
+  --color-neutral-100: #f8f4f4;
+  --color-neutral-200: #eae7e7;
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-400: #bab6b6;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #7d7979;
+  --color-neutral-700: #605d5d;
+  --color-neutral-800: #444141;
+  --color-neutral-900: #2d2b2b;
+
+  --color-accent-100: #fff2ef;
+  --color-accent-200: #ffe0d9;
+  --color-accent-300: #ffc4b8;
+  --color-accent-400: #ff9783;
+  --color-accent-500: #ff563c;
+  --color-accent-600: #dd2b0f;
+  --color-accent-700: #ae1800;
+  --color-accent-800: #7c1405;
+  --color-accent-900: #4d170e;
+
+  --font-heading: "Archivo", system-ui, sans-serif;
+  --font-body: "Archivo", system-ui, sans-serif;
+  --mono: ui-monospace, Menlo, Consolas, monospace;
+
+  /* semantic status colours — the only colours that carry meaning */
+  --status-running: oklch(0.72 0.15 152);
+  --status-running-tint: color-mix(in srgb, oklch(0.72 0.15 152) 15%, transparent);
+  --status-running-fg: oklch(0.8 0.1 152);
+  --status-stopped: var(--color-accent-500);
+  --status-warn: oklch(0.8 0.14 82);
+  --status-unknown: var(--color-neutral-600);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-text);
+  color: var(--color-neutral-200);
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+h1, h2, h3, h4, h5, h6 { font-family: var(--font-heading); font-weight: 800; }
+h6 { font-weight: 600; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+
+a { color: var(--color-accent-400); }
+a:hover { color: var(--color-accent-300); }
+
+::selection { background: color-mix(in srgb, var(--color-accent-400) 35%, transparent); }
+input::placeholder { color: var(--color-neutral-600); }
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--color-neutral-800); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+@keyframes blinkc { 50% { opacity: .2; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+button { font-family: inherit; }

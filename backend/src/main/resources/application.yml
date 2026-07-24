@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: nagad-deploy-console
+  # Default profile runs against Postgres. Activate the "dev" profile to use
+  # an in-memory H2 database so the service boots with no external dependency.
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/registrydb}
+    username: ${DB_USER:registry}
+    password: ${DB_PASSWORD:registry}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration,classpath:db/migration-pg
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      probes:
+        enabled: true   # exposes /actuator/health/liveness and /readiness for k8s
+
+nagad:
+  # Where the Ansible wrapper lives on the jump host. Deploy/fetch jobs shell
+  # out to this from a worker thread — never inline on the request thread.
+  ansible:
+    working-dir: ${ANSIBLE_DIR:/home/konasl/motaleb-ansible/stop-deploy-start}
+    # In demo mode the runner streams scripted output instead of invoking ansible.
+    simulate: ${ANSIBLE_SIMULATE:true}
+  mail:
+    relay: ${MAIL_RELAY:10.210.2.16:25}
+    from: no-reply@nagad.com.bd
+    # In demo mode OTP + approval mails are logged, not sent.
+    simulate: ${MAIL_SIMULATE:true}
+  otp:
+    ttl-seconds: 300
+  cors:
+    allowed-origins: ${CORS_ORIGINS:http://localhost:5173}
+
+logging:
+  level:
+    com.nagad.deploy: INFO
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:h2:mem:registrydb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  flyway:
+    locations: classpath:db/migration,classpath:db/migration-h2

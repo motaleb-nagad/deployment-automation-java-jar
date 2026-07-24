@@ -1,0 +1,20 @@
+# Java / Maven
+backend/target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs / editor / OS
+*.log
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# TS build info
+frontend/tsconfig.tsbuildinfo

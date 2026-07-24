@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: nagad-deploy
+data:
+  DB_URL: jdbc:postgresql://registry-db:5432/registrydb
+  CORS_ORIGINS: "https://deploy.nagad.internal"
+  # Demo defaults. Set both to "false" once the jump host + SMTP relay are wired in.
+  MAIL_SIMULATE: "true"
+  ANSIBLE_SIMULATE: "true"
+  MAIL_RELAY: "10.210.2.16:25"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: nagad-deploy
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: nagad-deploy
+spec:
+  # NOTE: sessions, OTP codes and in-flight deploy streams are held in memory. Running
+  # more than one replica requires either sticky sessions at the ingress OR moving those
+  # stores to Redis (see README "Scaling"). Until then, keep replicas: 1.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/shakil128/nagad-cd-backend:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: backend-config
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: registry-db, key: POSTGRES_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: registry-db, key: POSTGRES_PASSWORD }
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1Gi" }

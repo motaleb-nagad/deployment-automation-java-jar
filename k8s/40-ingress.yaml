@@ -1,0 +1,26 @@
+# Single hostname. The frontend nginx already proxies /api and /actuator to the backend,
+# so all traffic can enter through the frontend service. SSE needs proxy buffering off at
+# the ingress too — the annotations below cover nginx-ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nagad-deploy
+  namespace: nagad-deploy
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # If you scale the backend past one replica, also enable sticky sessions here
+    # (nginx.ingress.kubernetes.io/affinity: cookie) or move state to Redis.
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: deploy.nagad.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
