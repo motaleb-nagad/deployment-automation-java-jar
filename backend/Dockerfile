@@ -10,10 +10,10 @@ RUN mvn -q -B -DskipTests package
 # ---- runtime stage ----
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
-# Run as an unprivileged user.
-RUN groupadd -r nagad && useradd -r -g nagad nagad
+# Run as an unprivileged, fixed-UID user (matches the k8s runAsUser).
+RUN groupadd -g 1000 nagad && useradd -u 1000 -g nagad -m nagad
 COPY --from=build /app/target/deploy-console-*.jar app.jar
-USER nagad
+USER 1000
 EXPOSE 8080
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseZGC"
 # Container-friendly: honours cgroup memory limits, graceful shutdown handled by Spring.

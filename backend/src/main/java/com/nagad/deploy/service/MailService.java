@@ -23,11 +23,13 @@ public class MailService {
     private String from;
 
     public void send(String to, String subject, String body) {
+        // Never log the body: it can contain OTP codes and other sensitive detail.
         if (simulate) {
-            log.info("[MAIL:simulated relay={}] from={} to={} subject='{}'\n{}", relay, from, to, subject, body);
+            log.info("[MAIL:simulated relay={}] from={} to={} subject='{}' ({} chars)",
+                    relay, from, to, subject, body == null ? 0 : body.length());
             return;
         }
         // Production: open an SMTP connection to `relay` and send. Wire JavaMailSender here.
-        log.info("[MAIL:live relay={}] to={} subject='{}'", relay, to, subject);
+        log.info("[MAIL:live relay={}] from={} to={} subject='{}'", relay, from, to, subject);
     }
 }

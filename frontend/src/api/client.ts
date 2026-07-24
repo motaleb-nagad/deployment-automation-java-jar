@@ -53,10 +53,10 @@ export const api = {
   streamUrl: (p: string) => `/api${p}`,
 };
 
-/** Opens an SSE stream for a deploy run, forwarding auth via a query param since
- *  EventSource cannot set headers. The backend accepts the token either way. */
+/** Opens an SSE stream for a deploy run. Authorised by a single-use `streamTicket`
+ *  (from POST /deploy) — never the bearer token, which must not appear in a URL. */
 export function openDeployStream(
-  deploymentId: string,
+  streamTicket: string,
   handlers: {
     onLine?: (l: { level: string; text: string }) => void;
     onHost?: (h: { host: string; action: string; state: string }) => void;
@@ -64,7 +64,7 @@ export function openDeployStream(
     onError?: (msg: string) => void;
   },
 ): () => void {
-  const url = api.streamUrl(`/deploy/${deploymentId}/stream`) + `?access_token=${encodeURIComponent(token ?? '')}`;
+  const url = api.streamUrl('/deploy/stream') + `?ticket=${encodeURIComponent(streamTicket)}`;
   const es = new EventSource(url);
   es.addEventListener('line', (e) => handlers.onLine?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener('host', (e) => handlers.onHost?.(JSON.parse((e as MessageEvent).data)));

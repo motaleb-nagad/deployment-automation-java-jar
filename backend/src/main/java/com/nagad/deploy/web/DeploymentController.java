@@ -33,10 +33,14 @@ public class DeploymentController {
         return deployments.start(current.require(), req);
     }
 
-    /** Live per-host / terminal output for a run. */
-    @GetMapping(value = "/deploy/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@PathVariable String id) {
-        return deployments.stream(id);
+    /**
+     * Live per-host / terminal output for a run. Authorised by the single-use stream ticket
+     * returned from POST /deploy (EventSource cannot send an Authorization header, so a
+     * long-lived bearer token must never travel in this URL).
+     */
+    @GetMapping(value = "/deploy/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(@RequestParam("ticket") String ticket) {
+        return deployments.stream(ticket);
     }
 
     @GetMapping("/deployments")

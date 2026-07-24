@@ -14,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -42,7 +43,10 @@ public class DeploymentService {
     private boolean simulate;
 
     private final AtomicInteger seq = new AtomicInteger(5100);
+    // Keyed by single-use stream ticket, not by deployment id, so the stream URL never
+    // carries a reusable or guessable credential.
     private final Map<String, RunPlan> pending = new ConcurrentHashMap<>();
+    private final SecureRandom random = new SecureRandom();
 
     private record RunPlan(String deploymentId, String actor, Group group, List<String> hosts,
                            List<String> apps, List<String> actions, String cmd, List<Line> lines) {}
@@ -87,14 +91,18 @@ public class DeploymentService {
         String cmd = runner.command(g.cmd(), hosts, req.apps(), req.actions());
         deployments.save(new Deployment(id, null, g.cmd(), AnsibleRunner.hostExpr(hosts),
                 String.join(",", req.apps()), String.join(",", req.actions()), actor.getUsername()));
-        pending.put(id, new RunPlan(id, actor.getUsername(), g, hosts, req.apps(), req.actions(), cmd,
+
+        byte[] buf = new byte[32];
+        random.nextBytes(buf);
+        String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
+        pending.put(ticket, new RunPlan(id, actor.getUsername(), g, hosts, req.apps(), req.actions(), cmd,
                 runner.script(g, hosts, req.apps(), req.actions(), inv, cmd)));
-        return new DeployStartedResponse(id);
+        return new DeployStartedResponse(id, ticket);
     }
 
-    /** SSE stream of the run. Replays scripted output with realistic pacing, then finalizes. */
-    public SseEmitter stream(String deploymentId) {
-        RunPlan plan = pending.remove(deploymentId);
+    /** SSE stream of the run, authorised by the single-use ticket from {@link #start}. */
+    public SseEmitter stream(String ticket) {
+        RunPlan plan = ticket == null ? null : pending.remove(ticket); // single use — removed on connect
         SseEmitter emitter = new SseEmitter(0L); // no timeout — a run can take minutes
         if (plan == null) {
             executor.submit(() -> {

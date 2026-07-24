@@ -41,9 +41,17 @@ spec:
       labels:
         app: backend
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: backend
           image: ghcr.io/shakil128/nagad-cd-backend:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
           ports:
             - containerPort: 8080
           envFrom:
@@ -69,3 +77,9 @@ spec:
           resources:
             requests: { cpu: "250m", memory: "512Mi" }
             limits: { cpu: "1", memory: "1Gi" }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

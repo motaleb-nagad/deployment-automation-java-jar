@@ -58,10 +58,10 @@ export function Deploy() {
   async function execute() {
     setStep('running'); setLines([]); setRail({}); setDone(false);
     try {
-      const { deploymentId } = await api.post<{ deploymentId: string }>('/deploy', {
+      const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>('/deploy', {
         group: group!.cmd, hosts, apps, actions, sudoPassword: sudo,
       });
-      openDeployStream(deploymentId, {
+      openDeployStream(streamTicket, {
         onLine: (l) => setLines((p) => [...p, l]),
         onHost: (h) => setRail((p) => ({ ...p, [h.host]: { ...(p[h.host] ?? {}), [h.action]: h.state } })),
         onComplete: (c) => { setResult(c.rows); setDone(true); qc.invalidateQueries(); },

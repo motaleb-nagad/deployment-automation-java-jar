@@ -107,8 +107,8 @@ TanStack Query +               AnsibleRunner (simulated | real)       audit_log 
 Zustand                        MailService (simulated | SMTP relay)
 ```
 
-- **Live output** streams over **Server-Sent Events** (`/api/deploy/{id}/stream`); the run
-  executes on a Java 21 **virtual-thread** worker, never on the request thread.
+- **Live output** streams over **Server-Sent Events** (`GET /api/deploy/stream?ticket=…`); the
+  run executes on a Java 21 **virtual-thread** worker, never on the request thread.
 - **Atomic audit** — each state change and its audit row commit in the same transaction; a
   rolled-back action leaves no orphan entry, and `audit_log` is **append-only** (a Postgres
   trigger blocks `UPDATE`/`DELETE`).
@@ -119,6 +119,39 @@ Backend package layout: `domain` (entities) · `repo` (Spring Data) · `service`
 logic) · `web` (controllers) · `security` (token filter + RBAC) · `config` · `dto`.
 
 ---
+
+## Security
+
+Hardened with a SonarQube-style scan in mind:
+
+- **No secrets in URLs.** The bearer token travels only in the `Authorization` header. The
+  SSE deploy stream (which `EventSource` cannot send headers to) is authorised by a
+  **single-use, short-lived stream ticket** minted at `POST /api/deploy` — consumed on
+  connect, so it can't be replayed and won't linger in access logs.
+- **RBAC + gate enforced server-side** — `@PreAuthorize` for role checks, explicit r/w/x
+  checks in the services, and the deploy gate re-verified against the DB. The UI never
+  decides authorisation.
+- **CSRF** is disabled *deliberately and safely*: authentication is a non-cookie bearer
+  token, so there is no ambient credential for a cross-site request to abuse (SonarQube
+  hotspot `java:S4502` — mark as *Safe*). Session cookies are never issued.
+- **Least-exposed surface** — only `/actuator/health/*` and `/actuator/info` are exposed and
+  permitted; everything else is authenticated, and unmatched routes are `denyAll`.
+- **CORS** uses an explicit origin allow-list (`CORS_ORIGINS`) and a fixed header allow-list —
+  no wildcards, credentials off.
+- **No sensitive data in logs** — mail bodies (which carry OTP codes) are never logged; OTP
+  verification uses a constant-time comparison; tokens/OTPs are generated with `SecureRandom`.
+- **Append-only audit** — `audit_log` cannot be updated or deleted (Postgres trigger).
+- **Hardened containers** — both images run as a **non-root** user with `allowPrivilegeEscalation:
+  false`, all Linux capabilities dropped, `RuntimeDefault` seccomp, and a read-only root
+  filesystem on the backend (writable `/tmp` via `emptyDir`). The SPA sets `X-Frame-Options`,
+  `X-Content-Type-Options`, `Referrer-Policy`, and a `Content-Security-Policy`.
+- **No hardcoded secrets in the runtime config** — compose reads DB credentials from env with
+  dev-only defaults; k8s pulls them from a `Secret` (replace the placeholder before use).
+
+The only intentional demo affordances — any-4+-char password (`nagad.auth.demo`), the OTP code
+echoed to the UI (`MAIL_SIMULATE`), and simulated Ansible (`ANSIBLE_SIMULATE`) — are all
+config-gated and default to *off* semantics the moment those flags are set to `false`. See
+[Going live](#going-live).
 
 ## Scaling
 

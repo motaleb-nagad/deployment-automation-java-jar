@@ -3,6 +3,8 @@ package com.nagad.deploy.service;
 import com.nagad.deploy.domain.JarRegistry;
 import com.nagad.deploy.domain.Promotion;
 import com.nagad.deploy.domain.PromotionStatus;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nagad.deploy.repo.DeploymentRepository;
 import com.nagad.deploy.repo.JarRegistryRepository;
 import com.nagad.deploy.repo.PromotionRepository;
@@ -29,6 +31,7 @@ public class DeploymentFinalizer {
     private final DeploymentRepository deployments;
     private final MailService mail;
     private final AuditService audit;
+    private final ObjectMapper json = new ObjectMapper();
 
     public DeploymentFinalizer(FleetInventory inv, PromotionRepository promos, JarRegistryRepository registry,
                                DeploymentRepository deployments, MailService mail, AuditService audit) {
@@ -77,14 +80,11 @@ public class DeploymentFinalizer {
         return rows;
     }
 
-    private static String serialize(List<Map<String, String>> rows) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < rows.size(); i++) {
-            Map<String, String> r = rows.get(i);
-            if (i > 0) sb.append(',');
-            sb.append("{\"host\":\"").append(r.get("host")).append("\",\"before\":\"").append(r.get("before"))
-              .append("\",\"after\":\"").append(r.get("after")).append("\"}");
+    private String serialize(List<Map<String, String>> rows) {
+        try {
+            return json.writeValueAsString(rows);
+        } catch (JsonProcessingException e) {
+            return "[]";
         }
-        return sb.append(']').toString();
     }
 }

@@ -4,10 +4,11 @@
 services:
   db:
     image: postgres:15-alpine
+    # Local-dev credentials. Override via a .env file / shell env — never commit real secrets.
     environment:
-      POSTGRES_DB: registrydb
-      POSTGRES_USER: registry
-      POSTGRES_PASSWORD: registry
+      POSTGRES_DB: ${POSTGRES_DB:-registrydb}
+      POSTGRES_USER: ${POSTGRES_USER:-registry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -24,9 +25,9 @@ services:
       db:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://db:5432/registrydb
-      DB_USER: registry
-      DB_PASSWORD: registry
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-registrydb}
+      DB_USER: ${POSTGRES_USER:-registry}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       CORS_ORIGINS: http://localhost:8088
       # Demo mode: no live SMTP relay, ansible runs are simulated. Flip to false when
       # the jump host + relay are wired up.
@@ -47,7 +48,7 @@ services:
     environment:
       BACKEND_URL: http://backend:8080
     ports:
-      - "8088:80"
+      - "8088:8080"
 
 volumes:
   db-data:

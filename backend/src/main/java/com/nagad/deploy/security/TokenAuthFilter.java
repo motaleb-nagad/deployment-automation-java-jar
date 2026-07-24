@@ -33,9 +33,6 @@ public class TokenAuthFilter extends OncePerRequestFilter {
         String header = req.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             token = header.substring(7);
-        } else if (req.getParameter("access_token") != null) {
-            // EventSource (SSE) cannot set headers, so the deploy stream passes the token here.
-            token = req.getParameter("access_token");
         }
         if (token != null) {
             String username = sessions.resolve(token);

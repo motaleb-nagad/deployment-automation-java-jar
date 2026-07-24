@@ -3,6 +3,8 @@ package com.nagad.deploy.service;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -33,8 +35,11 @@ public class OtpService {
 
     public boolean verify(String username, String code) {
         Entry e = codes.get(username);
-        if (e == null || Instant.now().isAfter(e.expiresAt())) return false;
-        boolean ok = e.code().equals(code == null ? null : code.trim());
+        if (e == null || Instant.now().isAfter(e.expiresAt()) || code == null) return false;
+        // Constant-time comparison to avoid leaking the code through response timing.
+        boolean ok = MessageDigest.isEqual(
+                e.code().getBytes(StandardCharsets.UTF_8),
+                code.trim().getBytes(StandardCharsets.UTF_8));
         if (ok) codes.remove(username);
         return ok;
     }

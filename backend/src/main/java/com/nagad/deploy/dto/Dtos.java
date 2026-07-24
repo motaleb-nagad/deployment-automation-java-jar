@@ -33,7 +33,9 @@ public final class Dtos {
     public record DeployRequest(String group, List<String> hosts, List<String> apps,
                                 List<String> actions, String sudoPassword) {}
 
-    public record DeployStartedResponse(String deploymentId) {}
+    /** streamTicket is a single-use, short-lived credential for opening the SSE stream —
+     *  it keeps the long-lived bearer token out of the stream URL (and therefore out of logs). */
+    public record DeployStartedResponse(String deploymentId, String streamTicket) {}
 
     public record DeployAppView(String key, String jar, boolean approved, String approvedHash) {}
 
