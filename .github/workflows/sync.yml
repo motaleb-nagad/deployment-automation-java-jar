@@ -1,10 +1,8 @@
 name: Sync to Destination Repository
-
 on:
   push:
     branches:
       - main
-
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -13,16 +11,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Push to Target (stg branch)
         env:
           DEST_TOKEN: ${{ secrets.DEPLOYMENT_AUTOMATION }}
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          
+
+          # DEBUG: verify token reached runner and test repo access
+          echo "Token length: ${#DEST_TOKEN}"
+          echo "----- ls-remote test -----"
+          git ls-remote https://x-access-token:${DEST_TOKEN}@github.com/nagaddfs/deployment-automation.git 2>&1 | head -5
+          echo "--------------------------"
+
           # Add remote target
           git remote add target https://x-access-token:${DEST_TOKEN}@github.com/nagaddfs/deployment-automation.git
-          
+
           # Push local main branch to target repo's stg branch
           git push target main:stg --force
