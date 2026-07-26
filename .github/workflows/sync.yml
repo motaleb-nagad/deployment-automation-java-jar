@@ -14,11 +14,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to Target
+      - name: Push to Target (stg branch)
         env:
           DEST_TOKEN: ${{ secrets.DEPLOYMENT_AUTOMATION }}
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
+          
+          # Add remote target
           git remote add target https://x-access-token:${DEST_TOKEN}@github.com/nagaddfs/deployment-automation.git
-          git push target main --force
+          
+          # Push local main branch to target repo's stg branch
+          git push target main:stg --force
