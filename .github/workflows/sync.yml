@@ -3,7 +3,7 @@ name: Sync to Destination Repository
 on:
   push:
     branches:
-      - main  # Triggers whenever you push changes to main
+      - main
 
 jobs:
   sync:
@@ -18,5 +18,7 @@ jobs:
         env:
           DEST_TOKEN: ${{ secrets.DEPLOYMENT_AUTOMATION }}
         run: |
-          git remote add target https://x-access-token:${DEPLOYMENT_AUTOMATION}@github.com/nagaddfs/deployment-automation.git
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git remote add target https://x-access-token:${DEST_TOKEN}@github.com/nagaddfs/deployment-automation.git
           git push target main --force
