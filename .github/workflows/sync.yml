@@ -1,0 +1,22 @@
+name: Sync to Destination Repository
+
+on:
+  push:
+    branches:
+      - main  # Triggers whenever you push changes to main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Target
+        env:
+          DEST_TOKEN: ${{ secrets.DEST_REPO_TOKEN }}
+        run: |
+          git remote add target https://x-access-token:${DEST_TOKEN}@github.com/nagaddfs/deployment-automation.git
+          git push target main --force
