@@ -16,7 +16,7 @@ jobs:
 
       - name: Push to Target
         env:
-          DEST_TOKEN: ${{ secrets.DEST_REPO_TOKEN }}
+          DEST_TOKEN: ${{ secrets.DEPLOYMENT_AUTOMATION }}
         run: |
           git remote add target https://x-access-token:${DEST_TOKEN}@github.com/nagaddfs/deployment-automation.git
           git push target main --force
