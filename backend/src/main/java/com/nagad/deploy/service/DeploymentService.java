@@ -14,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -78,6 +79,22 @@ public class DeploymentService {
         List<String> hosts = (req.hosts() == null || req.hosts().isEmpty())
                 ? g.hosts().stream().map(FleetInventory.Host::name).toList() : req.hosts();
 
+        // Whitelist every element that ends up on the wrapper command line, so a request can
+        // never smuggle shell metacharacters into the remote ./run.sh invocation.
+        Set<String> validHosts = g.hosts().stream().map(FleetInventory.Host::name).collect(java.util.stream.Collectors.toSet());
+        for (String h : hosts) {
+            if (!validHosts.contains(h)) throw new ResponseStatusException(BAD_REQUEST, "unknown host " + h + " in " + g.cmd());
+        }
+        Set<String> validApps = g.svcs().stream().map(FleetInventory.Svc::key).collect(java.util.stream.Collectors.toSet());
+        for (String a : req.apps()) {
+            if (!validApps.contains(a)) throw new ResponseStatusException(BAD_REQUEST, "unknown app " + a + " in " + g.cmd());
+        }
+        for (String act : req.actions()) {
+            if (!Set.of("stop", "deploy", "start").contains(act)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown action " + act);
+            }
+        }
+
         // Governance gate: a deploy action requires an approved promotion per app+group.
         if (req.actions().contains("deploy")) {
             for (String app : req.apps()) {
@@ -119,15 +136,7 @@ public class DeploymentService {
 
     private void runStream(RunPlan plan, SseEmitter emitter) {
         try {
-            for (Line ln : plan.lines()) {
-                emitter.send(SseEmitter.event().name("line").data(ln));
-                if (ln.railHost() != null) {
-                    emitter.send(SseEmitter.event().name("host").data(Map.of(
-                            "host", ln.railHost(), "action", ln.railAction(), "state", ln.railState())));
-                }
-                Thread.sleep(simulate ? 130 : 0);
-            }
-            String lastLog = plan.lines().get(plan.lines().size() - 2).text();
+            String lastLog = simulate ? streamScripted(plan, emitter) : streamReal(plan, emitter);
             List<Map<String, String>> rows = finalizer.commit(plan.deploymentId(), plan.actor(),
                     plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
@@ -139,6 +148,43 @@ public class DeploymentService {
                 emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
             } catch (IOException ignored) {}
             emitter.completeWithError(e);
+        }
+    }
+
+    /** Demo mode: replay the scripted lines with a small delay so the console reads live. */
+    private String streamScripted(RunPlan plan, SseEmitter emitter) throws IOException, InterruptedException {
+        for (Line ln : plan.lines()) {
+            sendLine(emitter, ln);
+            Thread.sleep(130);
+        }
+        return plan.lines().get(plan.lines().size() - 2).text();
+    }
+
+    /** Production: SSH to the jump host, run the real wrapper, stream stdout. Non-zero exit fails the run. */
+    private String streamReal(RunPlan plan, SseEmitter emitter) throws IOException, InterruptedException {
+        StringBuilder lastLog = new StringBuilder();
+        int code = runner.execute(plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), ln -> {
+            try {
+                sendLine(emitter, ln);
+                if (ln.text() != null && !ln.text().isBlank()) {
+                    lastLog.setLength(0);
+                    lastLog.append(ln.text());
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+        if (code != 0) {
+            throw new IllegalStateException("run.sh exited with code " + code);
+        }
+        return lastLog.toString();
+    }
+
+    private void sendLine(SseEmitter emitter, Line ln) throws IOException {
+        emitter.send(SseEmitter.event().name("line").data(ln));
+        if (ln.railHost() != null) {
+            emitter.send(SseEmitter.event().name("host").data(Map.of(
+                    "host", ln.railHost(), "action", ln.railAction(), "state", ln.railState())));
         }
     }
 

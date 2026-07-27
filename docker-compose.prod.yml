@@ -24,13 +24,28 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # host.docker.internal -> the container host, so the backend can SSH to the jump
+    # host and invoke ./run.sh with the operator's ansible environment.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Private key authorised for the ansible operator (konasl) on the jump host.
+      # Place it on the host and keep it readable by the container user (uid 1000).
+      - ./secrets/deploy_key:/run/secrets/deploy_key:ro
     environment:
       DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-registrydb}
       DB_USER: ${POSTGRES_USER:-registry}
       DB_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://10.220.2.46:8088}
       MAIL_SIMULATE: ${MAIL_SIMULATE:-true}
-      ANSIBLE_SIMULATE: ${ANSIBLE_SIMULATE:-true}
+      # Real deploys by default now: SSH to the jump host and run ./run.sh.
+      # Set ANSIBLE_SIMULATE=true to fall back to scripted demo output.
+      ANSIBLE_SIMULATE: ${ANSIBLE_SIMULATE:-false}
+      ANSIBLE_SSH_HOST: ${ANSIBLE_SSH_HOST:-host.docker.internal}
+      ANSIBLE_SSH_PORT: ${ANSIBLE_SSH_PORT:-40167}
+      ANSIBLE_SSH_USER: ${ANSIBLE_SSH_USER:-konasl}
+      ANSIBLE_SSH_KEY: /run/secrets/deploy_key
+      ANSIBLE_DIR: ${ANSIBLE_DIR:-/home/konasl/motaleb-ansible/stop-deploy-start}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
       interval: 10s
