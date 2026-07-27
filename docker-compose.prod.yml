@@ -1,0 +1,49 @@
+# Production stack: pulls pre-built images from Docker Hub.
+#   docker compose -f docker-compose.prod.yml up -d
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-registrydb}
+      POSTGRES_USER: ${POSTGRES_USER:-registry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U registry -d registrydb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    image: bhuiyanshakil/deployment-automation-backend:latest
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-registrydb}
+      DB_USER: ${POSTGRES_USER:-registry}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-registry}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://10.220.2.46:8088}
+      MAIL_SIMULATE: ${MAIL_SIMULATE:-true}
+      ANSIBLE_SIMULATE: ${ANSIBLE_SIMULATE:-true}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    image: bhuiyanshakil/deployment-automation-frontend:latest
+    restart: always
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: http://backend:8080
+    ports:
+      - "8088:8080"
+
+volumes:
+  db-data:
