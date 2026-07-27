@@ -90,19 +90,9 @@ public class AnsibleRunner {
         String remote = "cd " + shq(workingDir) + " && ./run.sh "
                 + shq(group) + " " + shq(servers) + " " + shq(appsCsv) + " " + shq(actionsCsv);
 
-        List<String> argv = new ArrayList<>(List.of(
-                "ssh", "-i", keyFile().toString(),
-                "-p", Integer.toString(sshPort),
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=10",
-                "-o", "StrictHostKeyChecking=" + (strictHostKey ? "yes" : "no")));
-        if (!strictHostKey) { argv.add("-o"); argv.add("UserKnownHostsFile=/dev/null"); }
-        argv.add(sshUser + "@" + sshHost);
-        argv.add(remote);
-
         sink.accept(Line.log("user", "$ ./run.sh " + group + " " + servers + " " + appsCsv + " " + actionsCsv));
 
-        ProcessBuilder pb = new ProcessBuilder(argv);
+        ProcessBuilder pb = new ProcessBuilder(sshArgv(remote));
         pb.redirectErrorStream(true);
         Process proc = pb.start();
         String currentAction = firstActionOf(actions);
@@ -116,6 +106,44 @@ public class AnsibleRunner {
             }
         }
         return proc.waitFor();
+    }
+
+    /** The working directory the wrapper + inventory live in on the jump host. */
+    public String workingDir() { return workingDir; }
+
+    /**
+     * Run a command on the jump host over SSH and return its merged stdout/stderr. Used by the
+     * fleet collector to shell out to {@code ansible ... -m ping / -m shell} for real status.
+     * Enforces a hard timeout so a hung host can never wedge the collector.
+     */
+    public String capture(String remoteCommand, int timeoutSeconds) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(sshArgv(remoteCommand));
+        pb.redirectErrorStream(true);
+        Process proc = pb.start();
+        StringBuilder out = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) out.append(line).append('\n');
+        }
+        if (!proc.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
+            proc.destroyForcibly();
+            throw new IOException("jump-host command timed out after " + timeoutSeconds + "s");
+        }
+        return out.toString();
+    }
+
+    private List<String> sshArgv(String remoteCommand) throws IOException {
+        List<String> argv = new ArrayList<>(List.of(
+                "ssh", "-i", keyFile().toString(),
+                "-p", Integer.toString(sshPort),
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10",
+                "-o", "StrictHostKeyChecking=" + (strictHostKey ? "yes" : "no")));
+        if (!strictHostKey) { argv.add("-o"); argv.add("UserKnownHostsFile=/dev/null"); }
+        argv.add(sshUser + "@" + sshHost);
+        argv.add(remoteCommand);
+        return argv;
     }
 
     private static final Pattern HOST_LINE =
@@ -189,7 +217,6 @@ public class AnsibleRunner {
                              FleetInventory inv, String cmd) {
         List<Line> out = new ArrayList<>();
         out.add(Line.log("user", "$ " + cmd));
-        out.add(Line.log("dim", "BECOME password: ********"));
         out.add(Line.log("ink", stars("PLAY [" + g.key() + "]")));
         out.add(Line.log("task", stars("TASK [Gathering Facts]")));
         for (String h : hosts) out.add(Line.log("ok", "ok: [nagad-" + h + "]"));
