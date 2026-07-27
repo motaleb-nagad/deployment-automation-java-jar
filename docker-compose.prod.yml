@@ -8,10 +8,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-registrydb}
       POSTGRES_USER: ${POSTGRES_USER:-registry}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
-    security_opt:
-      - label:disable
+    privileged: true
     volumes:
-      - db-data:/var/lib/postgresql/data:Z
+      - db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U registry -d registrydb"]
       interval: 5s
