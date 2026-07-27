@@ -20,7 +20,6 @@ export function Deploy() {
   const [hosts, setHosts] = useState<string[]>([]);
   const [apps, setApps] = useState<string[]>([]);
   const [actions, setActions] = useState<string[]>(['stop', 'deploy', 'start']);
-  const [sudo, setSudo] = useState('');
   const [typed, setTyped] = useState('');
   const [lines, setLines] = useState<TermLine[]>([]);
   const [rail, setRail] = useState<Record<string, Record<string, string>>>({});
@@ -42,7 +41,7 @@ export function Deploy() {
   const sharedNoStop = isDeploy && !actions.includes('stop') && apps.some((a) => MULTI_INSTANCE.has(a));
 
   const hostExpr = hosts.length === 0 ? 'all' : hosts.length === 1 ? hosts[0] : `${hosts[0]}..${hosts[hosts.length - 1]}`;
-  const fullCmd = `./run.sh ${group.cmd} ${hostExpr} ${apps.join(',') || '<apps>'} ${actions.join(',')} -K`;
+  const fullCmd = `./run.sh ${group.cmd} ${hostExpr} ${apps.join(',') || '<apps>'} ${actions.join(',')}`;
 
   const canReview = apps.length > 0 && actions.length > 0 && hosts.length > 0 && unapproved.length === 0 && scoped;
   const needType = hosts.length > 1;
@@ -51,7 +50,7 @@ export function Deploy() {
   const toggle = <T,>(arr: T[], v: T): T[] => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
 
   function reset() {
-    setStep('build'); setApps([]); setActions(['stop', 'deploy', 'start']); setSudo(''); setTyped('');
+    setStep('build'); setApps([]); setActions(['stop', 'deploy', 'start']); setTyped('');
     setLines([]); setRail({}); setResult([]); setDone(false);
   }
 
@@ -59,7 +58,7 @@ export function Deploy() {
     setStep('running'); setLines([]); setRail({}); setDone(false);
     try {
       const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>('/deploy', {
-        group: group!.cmd, hosts, apps, actions, sudoPassword: sudo,
+        group: group!.cmd, hosts, apps, actions,
       });
       openDeployStream(streamTicket, {
         onLine: (l) => setLines((p) => [...p, l]),
@@ -137,11 +136,9 @@ export function Deploy() {
             <div style={{ fontSize: 11, color: 'var(--color-neutral-500)', marginTop: 6 }}>Order is fixed: stop → deploy → start. Deselect to skip a phase.</div>
           </div>
 
-          <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>5 — SUDO PASSWORD</h6>
-            <input type="password" value={sudo} onChange={(e) => setSudo(e.target.value)} placeholder="your sudo password (-K)"
-              style={{ width: 320, background: 'var(--color-neutral-900)', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 25%, transparent)', color: 'var(--color-neutral-100)', padding: '9px 10px', fontFamily: mono, fontSize: 12 }} />
-            <div style={{ fontSize: 11, color: 'var(--color-neutral-500)', marginTop: 6 }}>Used once for this action. Never stored, never remembered.</div>
+          <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', display: 'flex', gap: 8, alignItems: 'baseline' }}>
+            <span style={{ width: 8, height: 8, background: C.run, flex: 'none', alignSelf: 'center' }} />
+            No sudo password needed — the managed deploy playbooks run with <span style={{ fontFamily: mono, color: 'var(--color-neutral-300)' }}>become: false</span> and passwordless escalation, so runs are non-interactive.
           </div>
         </div>
 

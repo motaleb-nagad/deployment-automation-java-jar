@@ -31,8 +31,7 @@ export function System() {
       <section style={{ borderTop: rule2, padding: '18px 0' }}>
         <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 12px' }}>CONSOLE PALETTE — LIVE OUTPUT ON ASH</h6>
         <div style={{ background: '#dcdad5', padding: 14, maxWidth: 760, fontFamily: mono, fontSize: 11.5, lineHeight: 1.6 }}>
-          <div style={{ color: '#12100f' }}>$ ./run.sh core app1..app6 apigw stop,deploy,start -K</div>
-          <div style={{ color: '#78716c' }}>BECOME password: ********</div>
+          <div style={{ color: '#12100f' }}>$ ./run.sh core app1..app6 apigw stop,deploy,start</div>
           <div style={{ color: '#1c1917' }}>PLAY [nagad-app] ****************************************</div>
           <div style={{ color: '#c2410c' }}>TASK [deployment : apigw] *******************************</div>
           <div style={{ color: '#15803d' }}>ok: [nagad-app1] =&gt; verify: running (7e51e9f)</div>

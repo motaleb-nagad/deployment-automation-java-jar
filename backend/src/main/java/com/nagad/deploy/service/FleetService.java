@@ -3,9 +3,13 @@ package com.nagad.deploy.service;
 import com.nagad.deploy.dto.Dtos.*;
 import com.nagad.deploy.service.FleetInventory.Group;
 import com.nagad.deploy.service.FleetInventory.Svc;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -19,8 +23,13 @@ import java.util.*;
 public class FleetService {
 
     private final FleetInventory inv;
+    private final FleetCollector collector;
+
+    @Value("${nagad.ansible.simulate}")
+    private boolean simulate;
 
     private static final DateTimeFormatter HMS = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final String NA = "—";
 
     // Incident fixtures.
     private record Down(String g, String h, String s, String since) {}
@@ -32,11 +41,15 @@ public class FleetService {
     private static final Set<String> DRIFT_HOSTS = Set.of("app5", "app6");
     private static final String RESTART_GROUP = "nagad-app", RESTART_HOST = "app2", RESTART_SVC = "map", RESTART_UP = "0d 00:41";
 
-    public FleetService(FleetInventory inv) {
+    public FleetService(FleetInventory inv, FleetCollector collector) {
         this.inv = inv;
+        this.collector = collector;
     }
 
     public FleetView view(String scenario) {
+        // Demo mode keeps the scripted incident/healthy fixtures; production reads the real
+        // collector so the board shows actual reachability + running/stopped state.
+        if (!simulate) return realView();
         boolean incident = !"healthy".equalsIgnoreCase(scenario);
 
         int hostsTotal = 0, instancesTotal = 0;
@@ -92,6 +105,79 @@ public class FleetService {
         return new FleetView(collectedAt, "3 min ago", incident,
                 hostsTotal, svcKeys.size(), instancesTotal,
                 servicesDown, driftGroups, restarts, unknowns, attention, groupViews);
+    }
+
+    /**
+     * Real dashboard built from the collector snapshot. Reachability + running/stopped are
+     * measured; jar hash / uptime aren't read in this pass, so they show as "—". If the sweep
+     * failed, every service is reported "unknown" (never faked).
+     */
+    private FleetView realView() {
+        FleetCollector.Snapshot snap = collector.snapshot();
+
+        int hostsTotal = 0, instancesTotal = 0, servicesDown = 0, unknowns = 0;
+        Set<String> svcKeys = new HashSet<>();
+        List<GroupView> groupViews = new ArrayList<>();
+        List<AttentionView> attention = new ArrayList<>();
+
+        for (Group g : inv.groups()) {
+            hostsTotal += g.hosts().size();
+            List<ServiceCellView> cells = new ArrayList<>();
+            List<String> issues = new ArrayList<>();
+
+            for (Svc s : g.svcs()) {
+                svcKeys.add(s.key());
+                instancesTotal += s.instances() * g.hosts().size();
+                for (var host : g.hosts()) {
+                    String status;
+                    if (!snap.ok() || snap.unreachable().contains(host.name())) {
+                        status = "unknown";
+                    } else {
+                        status = snap.runningApps(host.name()).contains(s.key()) ? "running" : "stopped";
+                    }
+                    if ("stopped".equals(status)) {
+                        servicesDown++;
+                        if (!issues.contains("down")) issues.add("down");
+                        if (attention.size() < 40) {
+                            attention.add(new AttentionView("DOWN", s.key(), g.key() + " · " + host.name(),
+                                    "no running jar under /home/" + s.key() + "/was · expected running",
+                                    g.key(), s.key(), host.name()));
+                        }
+                    } else if ("unknown".equals(status)) {
+                        unknowns++;
+                        if (!issues.contains("unknown")) issues.add("unknown");
+                    }
+                    cells.add(new ServiceCellView(s.key(), host.name(), status, NA, NA, NA,
+                            host.ip(), s.jar(), s.instances(), NA));
+                }
+            }
+            groupViews.add(new GroupView(g.key(), g.cmd(), g.zone(), g.tier(),
+                    g.hosts().stream().map(FleetInventory.Host::name).toList(), cells, issues));
+        }
+
+        if (!snap.ok()) {
+            attention.add(0, new AttentionView("UNKNOWN", "collector", "fleet",
+                    "collector could not reach the jump host — every service shown as unknown",
+                    "", "", ""));
+        } else {
+            for (String h : snap.unreachable()) {
+                attention.add(new AttentionView("UNKNOWN", "host", h,
+                        "host unreachable over ansible ping — SSH/port/auth", "", "", h));
+            }
+        }
+
+        boolean incident = servicesDown > 0 || unknowns > 0 || !snap.ok();
+        String collectedAt = LocalTime.ofInstant(snap.at(), ZoneId.systemDefault()).format(HMS);
+        String age = humanAge(snap.at());
+        return new FleetView(collectedAt, age, incident,
+                hostsTotal, svcKeys.size(), instancesTotal,
+                servicesDown, 0, 0, unknowns, attention, groupViews);
+    }
+
+    private static String humanAge(Instant at) {
+        long secs = Math.max(0, Duration.between(at, Instant.now()).getSeconds());
+        if (secs < 60) return secs + " sec ago";
+        return (secs / 60) + " min ago";
     }
 
     private String statusOf(boolean incident, String g, String h, String s) {
