@@ -125,6 +125,20 @@ public class FleetService {
             List<ServiceCellView> cells = new ArrayList<>();
             List<String> issues = new ArrayList<>();
 
+            // Pre-compute, per host, the set of jars that have a running process. A service
+            // counts as running if its own user runs OR another user on the host runs the same
+            // jar — this covers the shared-jar aliases (apigw-summary, portal_davs, …) that have
+            // no /home/<user>/was of their own.
+            Map<String, Set<String>> runningJarsByHost = new HashMap<>();
+            for (var host : g.hosts()) {
+                Set<String> jars = new HashSet<>();
+                for (String user : snap.runningApps(host.name())) {
+                    String jar = FleetInventory.JAR_MAP.getOrDefault(user, "");
+                    if (!jar.isEmpty()) jars.add(jar);
+                }
+                runningJarsByHost.put(host.name(), jars);
+            }
+
             for (Svc s : g.svcs()) {
                 svcKeys.add(s.key());
                 instancesTotal += s.instances() * g.hosts().size();
@@ -133,7 +147,9 @@ public class FleetService {
                     if (!snap.ok() || snap.unreachable().contains(host.name())) {
                         status = "unknown";
                     } else {
-                        status = snap.runningApps(host.name()).contains(s.key()) ? "running" : "stopped";
+                        boolean up = snap.runningApps(host.name()).contains(s.key())
+                                || (!s.jar().isEmpty() && runningJarsByHost.get(host.name()).contains(s.jar()));
+                        status = up ? "running" : "stopped";
                     }
                     if ("stopped".equals(status)) {
                         servicesDown++;
@@ -160,9 +176,14 @@ public class FleetService {
                     "collector could not reach the jump host — every service shown as unknown",
                     "", "", ""));
         } else {
+            // Only surface hosts that are actually on the dashboard — the sweep hits the whole
+            // inventory (redis, rabbit, rundeck, …) which the fleet view doesn't track.
+            Set<String> fleetHosts = new HashSet<>();
+            for (Group g : inv.groups()) g.hosts().forEach(h -> fleetHosts.add(h.name()));
             for (String h : snap.unreachable()) {
+                if (!fleetHosts.contains(h)) continue;
                 attention.add(new AttentionView("UNKNOWN", "host", h,
-                        "host unreachable over ansible ping — SSH/port/auth", "", "", h));
+                        "host unreachable over ansible ssh — SSH/port/auth", "", "", h));
             }
         }
 
