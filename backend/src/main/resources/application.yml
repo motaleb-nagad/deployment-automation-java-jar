@@ -51,6 +51,13 @@ nagad:
       user: ${ANSIBLE_SSH_USER:konasl}
       key: ${ANSIBLE_SSH_KEY:/run/secrets/deploy_key}
       strict-host-key-checking: ${ANSIBLE_SSH_STRICT:false}
+    # Real fleet status. The backend only calls this script — it lives in the ansible
+    # package (the working-dir above) and owns all status-gathering logic and prod-load
+    # tuning. ttl-seconds bounds how often the portal may sweep prod (on-demand + cached).
+    fleet:
+      command: ${FLEET_STATUS_CMD:./fleet-status.sh}
+      timeout-seconds: ${FLEET_TIMEOUT:60}
+      ttl-seconds: ${FLEET_TTL:180}
   mail:
     relay: ${MAIL_RELAY:10.210.2.16:25}
     from: no-reply@nagad.com.bd

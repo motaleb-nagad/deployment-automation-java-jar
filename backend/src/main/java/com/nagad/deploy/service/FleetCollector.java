@@ -2,60 +2,59 @@ package com.nagad.deploy.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * Real fleet collector. Shells out (over SSH to the jump host) to a single Ansible sweep that
- * reports, per inventory host, whether it is reachable and which service users have a running
- * jar under {@code /home/<user>/was/}. This is the same connectivity mechanism the operators
- * use ({@code ansible -m ping} / an ad-hoc {@code ps}), so the dashboard reflects reality
- * instead of the scripted demo fixtures.
+ * Real fleet collector. The portal points at production, so it never invents its own Ansible
+ * commands: it calls a status script that lives in the ansible package ({@code fleet-status.sh}
+ * in the wrapper's working dir) and parses that script's stable, tab-separated output. All
+ * logic for HOW status is gathered — reachability, running-jar detection, forks/timeout to
+ * bound prod load — lives in that package script, the single source of truth. To change what
+ * status means, change the script, not this class.
  *
- * <p>Reachability and running/stopped are read without privilege escalation ({@code ps} shows
- * every user's command line). Jar hash / drift needs {@code become_user} to unzip
- * {@code git.properties}, so it is intentionally left out of this pass.
+ * <p>Collection is on-demand (only when the Fleet view is requested) and cached for a few
+ * minutes, so opening the dashboard can't hammer prod. The collector never throws: on any
+ * failure it returns {@code ok=false} and the view degrades to "unknown" rather than faking.
  *
- * <p>Snapshots are cached for a short interval and the collector never throws: on any failure
- * it returns a snapshot with {@code ok=false} so the view degrades to "unknown" rather than
- * breaking or inventing data.
+ * <p>Expected script output, one line per host:
+ * <pre>{@code <host>\t<UP|UNREACHABLE>\t<csv of running service users>}</pre>
  */
 @Service
 public class FleetCollector {
 
     private static final Logger log = LoggerFactory.getLogger(FleetCollector.class);
 
-    /** One reachable host's parsed state. */
     public record Snapshot(boolean ok, Instant at, Map<String, Set<String>> running, Set<String> unreachable) {
         public boolean reachable(String host) { return running.containsKey(host); }
         public Set<String> runningApps(String host) { return running.getOrDefault(host, Set.of()); }
     }
 
-    // Single sweep: per host, print a comma list of service users that have a running jar.
-    // The mid-pipeline grep may exit non-zero when a host runs nothing; paste (the last stage)
-    // still exits 0, so Ansible reports the host reachable with an empty list rather than FAILED.
-    private static final String PS_SWEEP =
-            "ps -eo args= | grep -oE '/home/[^/]+/was/[^ ]+\\.jar' | sed -E 's#.*/home/##; s#/was/.*##' | sort -u | paste -sd, -";
-
-    private static final Pattern LINE = Pattern.compile("^(\\S+)\\s*\\|\\s*(\\S+)");
-    private static final Duration TTL = Duration.ofSeconds(60);
-
     private final AnsibleRunner runner;
+    private final String statusCommand;
+    private final int timeoutSeconds;
+    private final Duration ttl;
 
     private volatile Snapshot cached;
 
-    public FleetCollector(AnsibleRunner runner) {
+    public FleetCollector(
+            AnsibleRunner runner,
+            @Value("${nagad.ansible.fleet.command:./fleet-status.sh}") String statusCommand,
+            @Value("${nagad.ansible.fleet.timeout-seconds:60}") int timeoutSeconds,
+            @Value("${nagad.ansible.fleet.ttl-seconds:180}") long ttlSeconds) {
         this.runner = runner;
+        this.statusCommand = statusCommand;
+        this.timeoutSeconds = timeoutSeconds;
+        this.ttl = Duration.ofSeconds(ttlSeconds);
     }
 
-    /** Cached snapshot, refreshed at most once per {@link #TTL}. */
+    /** Cached snapshot, refreshed at most once per configured TTL. */
     public synchronized Snapshot snapshot() {
-        if (cached != null && Duration.between(cached.at(), Instant.now()).compareTo(TTL) < 0) {
+        if (cached != null && Duration.between(cached.at(), Instant.now()).compareTo(ttl) < 0) {
             return cached;
         }
         cached = collect();
@@ -63,13 +62,14 @@ public class FleetCollector {
     }
 
     private Snapshot collect() {
-        String cmd = "cd '" + runner.workingDir().replace("'", "'\\''") + "' && "
-                + "ansible all -m shell -a \"" + PS_SWEEP + "\" -o 2>&1";
+        // Run the package-owned status script in the wrapper's working dir. The backend adds
+        // no ansible logic of its own — it just executes the script and reads its output.
+        String cmd = "cd '" + runner.workingDir().replace("'", "'\\''") + "' && " + statusCommand;
         String out;
         try {
-            out = runner.capture(cmd, 45);
+            out = runner.capture(cmd, timeoutSeconds);
         } catch (Exception e) {
-            log.warn("fleet collector sweep failed: {}", e.toString());
+            log.warn("fleet status script failed: {}", e.toString());
             return new Snapshot(false, Instant.now(), Map.of(), Set.of());
         }
 
@@ -77,36 +77,27 @@ public class FleetCollector {
         Set<String> unreachable = new HashSet<>();
         for (String raw : out.split("\n")) {
             if (raw.isBlank()) continue;
-            Matcher m = LINE.matcher(raw);
-            if (!m.find()) continue;
-            String host = strip(m.group(1));
-            String verdict = m.group(2);
-            if (raw.contains("UNREACHABLE") || raw.contains("| FAILED") || "FAILED".equals(verdict)) {
+            String[] f = raw.split("\t", -1);
+            if (f.length < 2) continue;                 // not a status line (banner, error, …)
+            String host = strip(f[0].trim());
+            String status = f[1].trim();
+            if ("UNREACHABLE".equals(status)) {
                 unreachable.add(host);
                 continue;
             }
-            // Ansible oneline stdout marker varies by version: "| (stdout) <text>" or ">> <text>".
-            String after;
-            int s = raw.indexOf("(stdout)");
-            if (s >= 0) {
-                after = raw.substring(s + "(stdout)".length());
-            } else {
-                int gg = raw.indexOf(">>");
-                after = gg >= 0 ? raw.substring(gg + 2) : "";
-            }
-            int se = after.indexOf("(stderr)");
-            if (se >= 0) after = after.substring(0, se);
-            String csv = after.trim();
+            if (!"UP".equals(status)) continue;
             Set<String> apps = new HashSet<>();
-            for (String a : csv.split(",")) {
-                a = a.trim();
-                if (!a.isEmpty()) apps.add(a);
+            if (f.length >= 3) {
+                for (String a : f[2].split(",")) {
+                    a = a.trim();
+                    if (!a.isEmpty()) apps.add(a);
+                }
             }
             running.put(host, apps);
         }
 
         if (running.isEmpty() && unreachable.isEmpty()) {
-            log.warn("fleet collector parsed no hosts from sweep output");
+            log.warn("fleet status script returned no parseable host lines");
             return new Snapshot(false, Instant.now(), Map.of(), Set.of());
         }
         return new Snapshot(true, Instant.now(), running, unreachable);
