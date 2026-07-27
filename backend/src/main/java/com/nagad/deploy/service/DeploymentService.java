@@ -43,6 +43,9 @@ public class DeploymentService {
     @Value("${nagad.ansible.simulate}")
     private boolean simulate;
 
+    // Shell-safe token: names that reach the run.sh command line may only contain these chars.
+    private static final java.util.regex.Pattern TOKEN = java.util.regex.Pattern.compile("^[A-Za-z0-9_.-]+$");
+
     private final AtomicInteger seq = new AtomicInteger(5100);
     // Keyed by single-use stream ticket, not by deployment id, so the stream URL never
     // carries a reusable or guessable credential.
@@ -80,14 +83,23 @@ public class DeploymentService {
                 ? g.hosts().stream().map(FleetInventory.Host::name).toList() : req.hosts();
 
         // Whitelist every element that ends up on the wrapper command line, so a request can
-        // never smuggle shell metacharacters into the remote ./run.sh invocation.
-        Set<String> validHosts = g.hosts().stream().map(FleetInventory.Host::name).collect(java.util.stream.Collectors.toSet());
+        // never smuggle shell metacharacters into the remote ./run.sh invocation. The wrapper
+        // treats every sub-group sharing a cmd as one target (e.g. "core" spans nagad-app,
+        // -dkyc, -limited, -txn-history), so validate against the union of that whole family.
+        List<Group> family = inv.managedGroups().stream().filter(x -> x.cmd().equals(g.cmd())).toList();
+        Set<String> validHosts = family.stream().flatMap(x -> x.hosts().stream())
+                .map(FleetInventory.Host::name).collect(java.util.stream.Collectors.toSet());
+        Set<String> validApps = family.stream().flatMap(x -> x.svcs().stream())
+                .map(FleetInventory.Svc::key).collect(java.util.stream.Collectors.toSet());
         for (String h : hosts) {
-            if (!validHosts.contains(h)) throw new ResponseStatusException(BAD_REQUEST, "unknown host " + h + " in " + g.cmd());
+            if (!TOKEN.matcher(h).matches() || !validHosts.contains(h)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown host " + h + " in " + g.cmd());
+            }
         }
-        Set<String> validApps = g.svcs().stream().map(FleetInventory.Svc::key).collect(java.util.stream.Collectors.toSet());
         for (String a : req.apps()) {
-            if (!validApps.contains(a)) throw new ResponseStatusException(BAD_REQUEST, "unknown app " + a + " in " + g.cmd());
+            if (!TOKEN.matcher(a).matches() || !validApps.contains(a)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown app " + a + " in " + g.cmd());
+            }
         }
         for (String act : req.actions()) {
             if (!Set.of("stop", "deploy", "start").contains(act)) {

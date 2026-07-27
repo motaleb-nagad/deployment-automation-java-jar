@@ -63,7 +63,8 @@ public class AnsibleRunner {
     }
 
     public String command(String cmd, List<String> hosts, List<String> apps, List<String> actions) {
-        return cmd + " " + hostExpr(hosts) + " " + String.join(",", apps) + " " + String.join(",", actions) + " -K";
+        // No -K: the managed deploy playbooks run with become: false, so runs are non-interactive.
+        return cmd + " " + hostExpr(hosts) + " " + String.join(",", apps) + " " + String.join(",", actions);
     }
 
     public static String hostExpr(List<String> hosts) {
