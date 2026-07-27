@@ -81,12 +81,22 @@ public class FleetCollector {
             if (!m.find()) continue;
             String host = strip(m.group(1));
             String verdict = m.group(2);
-            if (raw.contains("UNREACHABLE") || "FAILED".equals(verdict)) {
+            if (raw.contains("UNREACHABLE") || raw.contains("| FAILED") || "FAILED".equals(verdict)) {
                 unreachable.add(host);
                 continue;
             }
-            int i = raw.indexOf(">>");
-            String csv = i >= 0 ? raw.substring(i + 2).trim() : "";
+            // Ansible oneline stdout marker varies by version: "| (stdout) <text>" or ">> <text>".
+            String after;
+            int s = raw.indexOf("(stdout)");
+            if (s >= 0) {
+                after = raw.substring(s + "(stdout)".length());
+            } else {
+                int gg = raw.indexOf(">>");
+                after = gg >= 0 ? raw.substring(gg + 2) : "";
+            }
+            int se = after.indexOf("(stderr)");
+            if (se >= 0) after = after.substring(0, se);
+            String csv = after.trim();
             Set<String> apps = new HashSet<>();
             for (String a : csv.split(",")) {
                 a = a.trim();
