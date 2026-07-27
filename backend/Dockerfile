@@ -10,6 +10,10 @@ RUN mvn -q -B -DskipTests package
 # ---- runtime stage ----
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
+# openssh-client: real deploy runs SSH into the jump host to invoke ./run.sh.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 # Run as an unprivileged, fixed-UID user (matches the k8s runAsUser).
 RUN groupadd -g 1000 nagad && useradd -u 1000 -g nagad -m nagad
 COPY --from=build /app/target/deploy-console-*.jar app.jar

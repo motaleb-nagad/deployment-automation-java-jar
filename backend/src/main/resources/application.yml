@@ -41,6 +41,16 @@ nagad:
     working-dir: ${ANSIBLE_DIR:/home/konasl/motaleb-ansible/stop-deploy-start}
     # In demo mode the runner streams scripted output instead of invoking ansible.
     simulate: ${ANSIBLE_SIMULATE:true}
+    # Real runs SSH into the jump host as the ansible operator and invoke ./run.sh there,
+    # reusing that account's ansible install, inventory and SSH keys. Only used when
+    # simulate=false. host.docker.internal resolves to the container host (needs the
+    # extra_hosts host-gateway mapping in compose).
+    ssh:
+      host: ${ANSIBLE_SSH_HOST:host.docker.internal}
+      port: ${ANSIBLE_SSH_PORT:40167}
+      user: ${ANSIBLE_SSH_USER:konasl}
+      key: ${ANSIBLE_SSH_KEY:/run/secrets/deploy_key}
+      strict-host-key-checking: ${ANSIBLE_SSH_STRICT:false}
   mail:
     relay: ${MAIL_RELAY:10.210.2.16:25}
     from: no-reply@nagad.com.bd
