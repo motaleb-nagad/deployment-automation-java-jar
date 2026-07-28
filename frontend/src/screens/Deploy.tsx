@@ -33,10 +33,12 @@ export function Deploy() {
   const termRef = useRef<HTMLDivElement>(null);
 
   // ---- consolidated (mixed-group) state ----
+  // `pairs` are committed across groups; cHosts/cApps are the current group's live multi-select,
+  // folded into `pairs` when you switch group. The effective set is the union of both.
   const [pairs, setPairs] = useState<DeployPair[]>([]);
   const [cGroupKey, setCGroupKey] = useState<string>('');
-  const [cHost, setCHost] = useState('');
-  const [cApp, setCApp] = useState('');
+  const [cHosts, setCHosts] = useState<string[]>([]);
+  const [cApps, setCApps] = useState<string[]>([]);
   const [pairReview, setPairReview] = useState<ConsolidatedPairView[]>([]);
 
   const scopeList = me?.scope === 'all' ? null : me?.scope?.split(',').map((x) => x.trim()) ?? [];
@@ -57,14 +59,16 @@ export function Deploy() {
   const hostExpr = hosts.length === 0 ? 'all' : hosts.length === 1 ? hosts[0] : `${hosts[0]}..${hosts[hosts.length - 1]}`;
   const fullCmd = `./run.sh ${group.cmd} ${hostExpr} ${apps.join(',') || '<apps>'} ${actions.join(',')}`;
 
-  // consolidated derived
-  const pairTokens = pairs.map((p) => `${p.host}:${p.app}`).join(' ');
+  // consolidated derived — live cartesian of the current group's selection, unioned with committed
+  const livePairs: DeployPair[] = cHosts.flatMap((h) => cApps.map((a) => ({ host: h, app: a })));
+  const effectivePairs = dedupPairs([...pairs, ...livePairs]);
+  const pairTokens = effectivePairs.map((p) => `${p.host}:${p.app}`).join(' ');
   const consolidatedCmd = `./deploy.sh "${pairTokens || '<host:app …>'}" ${actions.join(',')}`;
-  const distinctPairHosts = [...new Set(pairs.map((p) => p.host))];
+  const distinctPairHosts = [...new Set(effectivePairs.map((p) => p.host))];
 
   const canReview = mode === 'group'
     ? (apps.length > 0 && actions.length > 0 && hosts.length > 0 && scoped)
-    : (pairs.length > 0 && actions.length > 0);
+    : (effectivePairs.length > 0 && actions.length > 0);
 
   const railHosts = mode === 'group' ? hosts : distinctPairHosts;
   const needType = railHosts.length > 1;
@@ -75,14 +79,22 @@ export function Deploy() {
 
   function reset() {
     setStep('build'); setApps([]); setActions(['stop', 'deploy', 'start']); setTyped('');
-    setLines([]); setRail({}); setResult([]); setDone(false); setPairs([]); setPairReview([]);
+    setLines([]); setRail({}); setResult([]); setDone(false);
+    setPairs([]); setCHosts([]); setCApps([]); setPairReview([]);
   }
 
-  function addPair() {
-    if (!cHost || !cApp) return;
-    if (pairs.some((p) => p.host === cHost && p.app === cApp)) return;
-    setPairs((p) => [...p, { host: cHost, app: cApp }]);
+  // Switching group folds the current live selection into the committed set so nothing is lost.
+  function pickCGroup(key: string) {
+    setPairs(dedupPairs([...pairs, ...livePairs]));
+    setCHosts([]); setCApps([]); setCGroupKey(key);
   }
+
+  function removePair(target: DeployPair) {
+    setPairs(effectivePairs.filter((p) => !(p.host === target.host && p.app === target.app)));
+    setCHosts([]); setCApps([]);
+  }
+
+  function clearPairs() { setPairs([]); setCHosts([]); setCApps([]); }
 
   // Build the review rows for the confirm step.
   const reviewRows: ReviewRow[] = mode === 'group'
@@ -95,7 +107,7 @@ export function Deploy() {
   async function goConfirm() {
     if (mode === 'consolidated') {
       try {
-        const resolved = await api.post<ConsolidatedPairView[]>('/deploy/consolidated/resolve', { pairs, actions });
+        const resolved = await api.post<ConsolidatedPairView[]>('/deploy/consolidated/resolve', { pairs: effectivePairs, actions });
         setPairReview(resolved);
       } catch (e) {
         flash(e instanceof ApiError ? e.message : 'could not resolve pairs', C.stop); return;
@@ -109,7 +121,7 @@ export function Deploy() {
     try {
       const body = mode === 'group'
         ? { group: group!.cmd, hosts, apps, actions }
-        : { pairs, actions };
+        : { pairs: effectivePairs, actions };
       const path = mode === 'group' ? '/deploy' : '/deploy/consolidated';
       const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>(path, body);
       openDeployStream(streamTicket, {
@@ -149,7 +161,7 @@ export function Deploy() {
       {mode === 'group' ? (
         <GroupBuild {...{ group, groups, hosts, setHosts, apps, setApps, actions, setActions, setGroupKey, hostExpr, fullCmd, scoped, me, canReview, sharedNoStop, toggle, goConfirm }} />
       ) : (
-        <ConsolidatedBuild {...{ scopedGroups, cGroup, setCGroupKey, cHost, setCHost, cApp, setCApp, addPair, pairs, setPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }} />
+        <ConsolidatedBuild {...{ scopedGroups, cGroup, pickCGroup, cHosts, setCHosts, cApps, setCApps, effectivePairs, removePair, clearPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }} />
       )}
     </main>
   );
@@ -359,11 +371,13 @@ function GroupBuild({ group, groups, hosts, setHosts, apps, setApps, actions, se
 }
 
 // ============================ CONSOLIDATED BUILD ============================
-function ConsolidatedBuild({ scopedGroups, cGroup, setCGroupKey, cHost, setCHost, cApp, setCApp, addPair, pairs, setPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }: any) {
+function ConsolidatedBuild({ scopedGroups, cGroup, pickCGroup, cHosts, setCHosts, cApps, setCApps, effectivePairs, removePair, clearPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }: any) {
+  const allHostsOn = cGroup && cHosts.length === cGroup.hosts.length && cGroup.hosts.length > 0;
+  const allAppsOn = cGroup && cApps.length === cGroup.apps.length && cGroup.apps.length > 0;
   return (
     <>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 12px', marginBottom: 4, background: 'var(--color-neutral-900)', fontSize: 12, color: 'var(--color-neutral-300)' }}>
-        <span style={{ width: 9, height: 9, background: C.run, flex: 'none' }} />Target <span style={{ fontFamily: mono, color: 'var(--color-neutral-100)' }}>host:app</span> pairs across <strong style={{ color: 'var(--color-neutral-100)' }}>different groups</strong> in one run. Add-on only — maps to <span style={{ fontFamily: mono, color: 'var(--color-neutral-100)' }}>./deploy.sh</span>, the per-group flow is untouched.
+        <span style={{ width: 9, height: 9, background: C.run, flex: 'none' }} />Select <strong style={{ color: 'var(--color-neutral-100)' }}>multiple hosts and apps</strong> — every host×app combination is added as a pair. Switch group to add more; picks carry over. Maps to <span style={{ fontFamily: mono, color: 'var(--color-neutral-100)' }}>./deploy.sh</span>; the per-group flow is untouched.
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: 36, borderTop: rule2, paddingTop: 22, alignItems: 'start' }}>
         <div style={{ display: 'grid', gap: 24 }}>
@@ -372,7 +386,7 @@ function ConsolidatedBuild({ scopedGroups, cGroup, setCGroupKey, cHost, setCHost
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 2 }}>
               {scopedGroups.map((g: DeployGroup) => {
                 const on = g.key === cGroup?.key;
-                return <button key={g.key} onClick={() => { setCGroupKey(g.key); setCHost(''); setCApp(''); }}
+                return <button key={g.key} onClick={() => pickCGroup(g.key)}
                   style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)', background: on ? 'var(--color-neutral-100)' : 'transparent',
                     color: on ? 'var(--color-text)' : 'var(--color-neutral-300)', cursor: 'pointer', padding: '8px 10px', textAlign: 'left', fontFamily: mono, fontSize: 11 }}>
                   {g.cmd}<br /><span style={{ fontSize: 9.5, opacity: 0.65 }}>{g.key} · {g.hosts.length}h</span></button>;
@@ -381,26 +395,35 @@ function ConsolidatedBuild({ scopedGroups, cGroup, setCGroupKey, cHost, setCHost
           </div>
 
           <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>2 — HOST</h6>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
+              <h6 style={{ color: 'var(--color-neutral-400)', margin: 0 }}>2 — HOSTS <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— multi-select</span></h6>
+              {cGroup && <button onClick={() => setCHosts(allHostsOn ? [] : [...cGroup.hosts])} style={linkBtn}>{allHostsOn ? 'CLEAR' : 'SELECT ALL'}</button>}
+            </div>
             <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-              {cGroup?.hosts.map((h: string) => { const on = h === cHost; return (
-                <button key={h} onClick={() => setCHost(h)} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
+              {cGroup?.hosts.map((h: string) => { const on = cHosts.includes(h); return (
+                <button key={h} onClick={() => setCHosts((p: string[]) => toggle(p, h))} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
                   background: on ? 'var(--color-neutral-100)' : 'transparent', color: on ? 'var(--color-text)' : 'var(--color-neutral-300)', cursor: 'pointer', padding: '7px 12px', fontFamily: mono, fontSize: 11.5 }}>{h}</button>
               ); })}
             </div>
           </div>
 
           <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>3 — APP</h6>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
+              <h6 style={{ color: 'var(--color-neutral-400)', margin: 0 }}>3 — APPS <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— multi-select</span></h6>
+              {cGroup && <button onClick={() => setCApps(allAppsOn ? [] : cGroup.apps.map((a: any) => a.key))} style={linkBtn}>{allAppsOn ? 'CLEAR' : 'SELECT ALL'}</button>}
+            </div>
             <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-              {cGroup?.apps.map((a: any) => { const on = a.key === cApp; return (
-                <button key={a.key} onClick={() => setCApp(a.key)} title={a.jar} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
+              {cGroup?.apps.map((a: any) => { const on = cApps.includes(a.key); return (
+                <button key={a.key} onClick={() => setCApps((p: string[]) => toggle(p, a.key))} title={a.jar} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
                   background: on ? 'var(--color-neutral-100)' : 'transparent', color: on ? 'var(--color-text)' : 'var(--color-neutral-300)', cursor: 'pointer', padding: '7px 12px', fontFamily: mono, fontSize: 11.5 }}>
                   {a.key}{a.approved && <span style={{ fontSize: 9, color: on ? '#0a7d34' : '#22c55e' }}> ✓</span>}</button>
               ); })}
             </div>
-            <button onClick={addPair} disabled={!cHost || !cApp} style={{ marginTop: 10, border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', background: 'transparent', color: 'var(--color-neutral-100)', cursor: cHost && cApp ? 'pointer' : 'default', padding: '8px 14px', fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 10.5, letterSpacing: '.1em', opacity: cHost && cApp ? 1 : 0.4 }}>
-              + ADD PAIR {cHost && cApp ? `— ${cHost}:${cApp}` : ''}</button>
+            <div style={{ fontSize: 11, color: 'var(--color-neutral-500)', marginTop: 8 }}>
+              {cHosts.length > 0 && cApps.length > 0
+                ? `Adds ${cHosts.length}×${cApps.length} = ${cHosts.length * cApps.length} pair(s) for ${cGroup?.cmd}.`
+                : 'Pick at least one host and one app.'}
+            </div>
           </div>
 
           <ActionPicker actions={actions} setActions={setActions} toggle={toggle} />
@@ -409,18 +432,21 @@ function ConsolidatedBuild({ scopedGroups, cGroup, setCGroupKey, cHost, setCHost
         <div style={{ display: 'grid', gap: 18, position: 'sticky', top: 20 }}>
           <CommandBox cmd={consolidatedCmd} />
           <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 6px' }}>PAIRS <span style={{ fontWeight: 400, color: 'var(--color-neutral-500)' }}>({pairs.length})</span></h6>
-            <div style={{ borderTop: rule2 }}>
-              {pairs.length === 0 && <div style={{ padding: '10px 2px', fontSize: 12, color: 'var(--color-neutral-500)' }}>No pairs yet — pick a host and app, then ADD PAIR.</div>}
-              {pairs.map((p: DeployPair, i: number) => (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+              <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 6px' }}>PAIRS <span style={{ fontWeight: 400, color: 'var(--color-neutral-500)' }}>({effectivePairs.length})</span></h6>
+              {effectivePairs.length > 0 && <button onClick={clearPairs} style={linkBtn}>CLEAR ALL</button>}
+            </div>
+            <div style={{ borderTop: rule2, maxHeight: 260, overflow: 'auto' }}>
+              {effectivePairs.length === 0 && <div style={{ padding: '10px 2px', fontSize: 12, color: 'var(--color-neutral-500)' }}>No pairs yet — select hosts and apps above.</div>}
+              {effectivePairs.map((p: DeployPair) => (
                 <div key={`${p.host}:${p.app}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: rule1, fontFamily: mono, fontSize: 12 }}>
                   <span style={{ color: 'var(--color-neutral-100)' }}>{p.host}</span><span style={{ color: 'var(--color-neutral-600)' }}>:</span><span style={{ color: 'var(--color-neutral-300)' }}>{p.app}</span>
                   <div style={{ flex: 1 }} />
-                  <button onClick={() => setPairs(pairs.filter((_: DeployPair, j: number) => j !== i))} style={{ border: 0, background: 'transparent', color: C.stop, cursor: 'pointer', fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 10, letterSpacing: '.1em' }}>REMOVE</button>
+                  <button onClick={() => removePair(p)} style={{ border: 0, background: 'transparent', color: C.stop, cursor: 'pointer', fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 10, letterSpacing: '.1em' }}>REMOVE</button>
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-neutral-500)', marginTop: 8 }}>{distinctPairHosts.length} host(s) · {pairs.length} pair(s) · {actions.join(' → ')}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-neutral-500)', marginTop: 8 }}>{distinctPairHosts.length} host(s) · {effectivePairs.length} pair(s) · {actions.join(' → ')}</div>
           </div>
           <button onClick={goConfirm} disabled={!canReview} style={reviewBtn(canReview)}>REVIEW →</button>
           <div style={{ fontSize: 11, color: 'var(--color-neutral-500)' }}>{!me?.x ? 'Your role can build but not execute (no x permission).' : 'Nothing runs until you confirm on the next step.'}</div>
@@ -428,6 +454,17 @@ function ConsolidatedBuild({ scopedGroups, cGroup, setCGroupKey, cHost, setCHost
       </div>
     </>
   );
+}
+
+/** Union of host:app pairs, de-duplicated preserving order. */
+function dedupPairs(arr: DeployPair[]): DeployPair[] {
+  const seen = new Set<string>();
+  const out: DeployPair[] = [];
+  for (const p of arr) {
+    const k = `${p.host}:${p.app}`;
+    if (!seen.has(k)) { seen.add(k); out.push(p); }
+  }
+  return out;
 }
 
 function ActionPicker({ actions, setActions, toggle }: any) {
