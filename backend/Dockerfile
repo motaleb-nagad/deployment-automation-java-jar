@@ -8,14 +8,15 @@ COPY src ./src
 RUN mvn -q -B -DskipTests package
 
 # ---- runtime stage ----
-FROM eclipse-temurin:21-jre-jammy
+# Alpine JRE: a musl base with a minimal package set, so the image carries far fewer
+# OS-level CVEs than the Ubuntu (jammy) JRE image. The floating tag also picks up the
+# latest patched Alpine on every rebuild.
+FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 # openssh-client: real deploy runs SSH into the jump host to invoke ./run.sh.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache openssh-client
 # Run as an unprivileged, fixed-UID user (matches the k8s runAsUser).
-RUN groupadd -g 1000 nagad && useradd -u 1000 -g nagad -m nagad
+RUN addgroup -g 1000 nagad && adduser -u 1000 -G nagad -D nagad
 COPY --from=build /app/target/deploy-console-*.jar app.jar
 USER 1000
 EXPOSE 8080

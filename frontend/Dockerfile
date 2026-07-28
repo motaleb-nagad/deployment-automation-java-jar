@@ -7,8 +7,9 @@ COPY . .
 RUN npm run build
 
 # ---- runtime stage ----
-# Unprivileged nginx: runs as non-root (uid 101), listens on 8080.
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+# Unprivileged nginx: runs as non-root (uid 101), listens on 8080. Stable 1.28 line on a
+# current Alpine base; the floating tag picks up the latest patched Alpine on every rebuild.
+FROM nginxinc/nginx-unprivileged:1.28-alpine
 # SPA + reverse proxy for /api → backend service.
 COPY --chown=nginx:nginx nginx.conf /etc/nginx/templates/default.conf.template
 COPY --chown=nginx:nginx --from=build /app/dist /usr/share/nginx/html
