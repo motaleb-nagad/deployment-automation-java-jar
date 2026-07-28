@@ -1,0 +1,252 @@
+---
+# CONSOLIDATED — mixed-group stop/deploy/start in a SINGLE run.
+#
+# This is an ADD-ON. It does NOT replace or modify core.yml / web.yml /
+# web-dmz.yml / ussd.yml / knotifypush.yml / apigwdoc.yml. Those keep working
+# exactly as before. Use this only when you want to target hosts that live in
+# DIFFERENT inventory groups within one command.
+#
+# Driven by a single variable `pairs` — comma-separated host:app tokens.
+# Direct example:
+#   ansible-playbook consolidated.yml \
+#     -l nagad-app1,nagad-web2,nagad-dmz-web1,nagad-ussd2 \
+#     -e 'target=all' \
+#     -e 'pairs=nagad-app1:map,nagad-web2:syscore,nagad-dmz-web1:dmsgw,nagad-ussd2:outboundproxy' \
+#     -e 'actions=stop,deploy,start'
+#
+# ---------------------------------------------------------------------------
+# MISSING-SERVICE HANDLING (added):
+#   A host:app pair may name a service that is NOT installed on that host
+#   (e.g. app3:portal_davs when portal_davs only lives on the txn-history
+#   tier). Previously the service user did not exist, `become_user` failed,
+#   and the whole run aborted. Now every pair is availability-checked first:
+#   a service that is not present on its host is SKIPPED (not failed), the run
+#   continues for every service that IS present, and each skip is announced on
+#   stdout as a machine-readable marker line:
+#       SKIP_PAIR: <short-host>:<app>
+#   so the deploy console can show it as "skipped" rather than a failure.
+# ---------------------------------------------------------------------------
+
+- hosts: "{{ target | default('all') }}"
+  vars_files:
+    - group_vars_mail.yml
+  vars:
+    # ---- Union of every group's jar_map -------------------------------------
+    jar_map:
+      # --- core ---
+      apigw: api-gateway-1.0.jar
+      apigw-summary: api-gateway-1.0.jar
+      apigwext: api-gatewayext-1.0.jar
+      bds: bulk-disbursement-service-1.0.jar
+      bkofc: back-office-service-1.0.jar
+      bkofc-summary: back-office-service-1.0.jar
+      cms: cms-1.0.jar
+      cp: cloud-platform-1.0.jar
+      cs: charge-service-1.0.jar
+      davs: data-analytics-visualization-system-1.0.jar
+      dfs: mobile-banking-service-1.0.jar
+      dmscore: dms-portal-core-1.0.jar
+      drs: dispute-resolution-service-1.0.jar
+      ecs: e-commerce-service-1.0.jar
+      extch: external-channel-1.0.jar
+      extchSMS: external-channel-1.0.jar
+      ias: ias-1.0.jar
+      kod: kod-1.0.jar
+      knotify: knotify-1.0.jar
+      map: mobile-platform-1.0.jar
+      mps: merchant-payout-system-1.0.jar
+      npsb_recon: npsb-reconciliation-1.0.0.jar
+      pcs: prepaid-card-service-1.0.jar
+      portal_davs: data-analytics-visualization-system-1.0.jar
+      portal_dfs: mobile-banking-service-1.0.jar
+      rms: reward-management-service-1.0.jar
+      rpg: remote-payment-gateway-server-1.0.jar
+      spg: secure-payment-gateway-1.0.jar
+      tms: transaction-management-system-1.0.jar
+      tsp: token-service-provider-1.0.jar
+      utilityservice: kona-utility-1.0.jar
+      # --- web ---
+      syscore: system-portal-core-1.0.jar
+      callcentercore: call-center-portal-core-1.0.jar
+      accs: disbursement-manager-1.0.jar
+      auth: authentication-server-1.0.jar
+      # --- web-dmz ---
+      dmsgw: portal-gateway-1.0.jar
+      sysgw: portal-gateway-1.0.jar
+      callcentergw: portal-gateway-1.0.jar
+      rpgweb: rpg-web-1.0.jar
+      # --- ussd ---
+      ussdgwrobi: ussd-api-gateway-1.0.jar
+      ussdgwttalk: ussd-api-gateway-1.0.jar
+      ussdgwblink: ussd-api-gateway-1.0.jar
+      ussdgwgp: ussd-api-gateway-1.0.jar
+      outboundproxy: outboundproxy-1.0.jar
+      # --- knotifypush ---
+      knotifypush: knotify-1.0.jar
+
+    # ---- Parse `pairs` into a per-host app list -----------------------------
+    pair_list: >-
+      {{ pairs.split(',') | map('trim') | select() | list
+         | map('regex_replace', '^([^:]+):(.+)$', '{"host":"\1","app":"\2"}')
+         | map('from_json') | list }}
+    my_apps: >-
+      {{ pair_list | selectattr('host','equalto', inventory_hostname)
+         | map(attribute='app') | list }}
+    apps_list: "{{ my_apps }}"
+    actions_list: "{{ (actions | default('stop,deploy,start')).split(',') | map('trim') | list }}"
+    deploy_group: "consolidated"
+    short_host: "{{ inventory_hostname | regex_replace('^nagad-', '') }}"
+
+  pre_tasks:
+    - name: Validate pairs were provided
+      fail:
+        msg: "No 'pairs' provided. Expected -e 'pairs=host:app,host:app,...'"
+      when: pairs is not defined or (pairs | trim) == ""
+      run_once: true
+
+    - name: Validate every app exists in the merged jar_map
+      fail:
+        msg: "Unknown app '{{ item.app }}' for host '{{ item.host }}'. Valid: {{ jar_map.keys() | list | join(', ') }}"
+      when: item.app not in jar_map
+      loop: "{{ pair_list }}"
+      run_once: true
+
+    - name: Skip hosts that have no app assigned
+      meta: end_host
+      when: apps_list | length == 0
+
+    # ---- Availability pre-check -----------------------------------------
+    # A service "exists" on this host when its service user is present AND its
+    # /home/<app>/was deploy directory exists. Run as the connection user
+    # (become: false) — we must NOT become a user that may not exist.
+    - name: Detect which target services are actually installed on this host
+      become: false
+      shell: |
+        if getent passwd "{{ item }}" >/dev/null 2>&1 && [ -d "/home/{{ item }}/was" ]; then
+          echo present
+        else
+          echo missing
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ apps_list }}"
+      register: presence
+      changed_when: false
+      failed_when: false
+
+    - name: Split apps into present / missing for this host
+      set_fact:
+        present_apps: "{{ presence.results | selectattr('stdout', 'search', 'present') | map(attribute='item') | list }}"
+        missing_apps: "{{ presence.results | selectattr('stdout', 'search', 'missing') | map(attribute='item') | list }}"
+
+    # Machine-readable markers the deploy console parses to mark these pairs
+    # "skipped" instead of failing the run. One line per skipped pair.
+    - name: Announce skipped services (console SKIP markers)
+      debug:
+        msg: "SKIP_PAIR: {{ short_host }}:{{ item }}"
+      loop: "{{ missing_apps }}"
+      when: missing_apps | length > 0
+
+    - name: Human-readable skip note
+      debug:
+        msg: "SKIPPED on {{ inventory_hostname }} — service not installed here, continuing without it: {{ missing_apps | join(', ') }}"
+      when: missing_apps | length > 0
+
+    - name: End this host if every targeted service is missing here
+      meta: end_host
+      when: present_apps | length == 0
+
+    - name: Record run start time
+      set_fact:
+        deploy_start: "{{ lookup('pipe', 'date +\"%Y-%m-%d %H:%M:%S %Z\"') }}"
+      run_once: true
+      delegate_to: localhost
+      become: false
+
+  tasks:
+    - block:
+
+        # NOTE: every action loop below runs over `present_apps`, never the raw
+        # `apps_list`, so a service missing on this host is skipped, not failed.
+        - name: Capture BEFORE jar hashes
+          include_tasks: roles/notify/tasks/capture_hash.yml
+          vars:
+            app_user: "{{ item }}"
+            jar_name: "{{ jar_map[item] }}"
+            phase: before
+          loop: "{{ present_apps }}"
+
+        - name: STOP components
+          include_role: { name: stopcomponent }
+          vars: { component: "{{ item }}" }
+          loop: "{{ present_apps }}"
+          when: "'stop' in actions_list"
+
+        - name: Mark stop result
+          set_fact: { res_stop: "OK" }
+          when: "'stop' in actions_list"
+
+        - name: DEPLOY jars
+          include_role: { name: deployment }
+          vars: { app_user: "{{ item }}", jar_name: "{{ jar_map[item] }}" }
+          loop: "{{ present_apps }}"
+          when: "'deploy' in actions_list"
+
+        - name: Mark deploy result
+          set_fact: { res_deploy: "OK" }
+          when: "'deploy' in actions_list"
+
+        - name: START components
+          include_role: { name: startcomponent }
+          vars: { component: "{{ item }}" }
+          loop: "{{ present_apps }}"
+          when: "'start' in actions_list"
+
+        - name: Mark start result
+          set_fact: { res_start: "OK" }
+          when: "'start' in actions_list"
+
+        - name: Capture AFTER jar hashes
+          include_tasks: roles/notify/tasks/capture_hash.yml
+          vars:
+            app_user: "{{ item }}"
+            jar_name: "{{ jar_map[item] }}"
+            phase: after
+          loop: "{{ present_apps }}"
+
+        - name: Send SUCCESS report
+          include_role: { name: notify }
+          vars:
+            mail_status: SUCCESS
+            deploy_apps: "{{ pair_list | map('to_json') | list | join(' | ') }}"
+            deploy_actions: "{{ actions_list | join(',') }}"
+          when: mail_enabled | bool
+          run_once: true
+
+      rescue:
+
+        - name: Capture AFTER hashes even on failure
+          include_tasks: roles/notify/tasks/capture_hash.yml
+          vars:
+            app_user: "{{ item }}"
+            jar_name: "{{ jar_map[item] }}"
+            phase: after
+          loop: "{{ present_apps | default([]) }}"
+          ignore_errors: true
+
+        - name: Send FAILURE report
+          include_role: { name: notify }
+          vars:
+            mail_status: FAILED
+            deploy_apps: "{{ pair_list | map('to_json') | list | join(' | ') }}"
+            deploy_actions: "{{ actions_list | join(',') }}"
+            fail_reason: >-
+              Consolidated deployment failed on host {{ inventory_hostname }}.
+              See the Ansible console output above (the failed task and the
+              PLAY RECAP) for the exact failing task and error detail.
+          when: mail_enabled | bool
+          run_once: true
+
+        - name: Re-raise the failure
+          fail:
+            msg: "Deployment failed -- report mailed. See above for details."
