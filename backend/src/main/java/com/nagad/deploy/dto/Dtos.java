@@ -70,6 +70,10 @@ public final class Dtos {
     public record AdminRow(String username, String name, String role, String scope,
                            boolean r, boolean w, boolean x) {}
 
+    /** Super-admin provisions an account with an initial password. */
+    public record CreateUserRequest(String username, String name, String email, String role,
+                                    String scope, boolean r, boolean w, boolean x, String password) {}
+
     // ---- audit ----
     public record AuditRow(String ts, String actor, String verb, String target, String detail) {}
 }

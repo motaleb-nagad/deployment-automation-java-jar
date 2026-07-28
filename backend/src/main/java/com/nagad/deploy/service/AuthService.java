@@ -35,7 +35,7 @@ public class AuthService {
     private final SecureRandom random = new SecureRandom();
     private final Map<String, String> pending = new ConcurrentHashMap<>(); // step1Token -> username
 
-    @Value("${nagad.auth.demo:true}")
+    @Value("${nagad.auth.demo:false}")
     private boolean demo;
     @Value("${nagad.mail.simulate}")
     private boolean mailSimulate;
@@ -50,39 +50,15 @@ public class AuthService {
         this.encoder = encoder;
     }
 
-    public LoginResponse login(LoginRequest req) {
+    /** Single-factor sign-in: username + password issues a session directly (OTP retired). */
+    public SessionResponse login(LoginRequest req) {
         AppUser u = users.findById(req.username())
                 .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "invalid credentials"));
         if (!passwordOk(u, req.password())) {
             throw new ResponseStatusException(UNAUTHORIZED, "invalid credentials");
         }
-        String code = otp.issue(u.getUsername());
-        mail.send(u.getEmail(), "Nagad Deploy Console — your sign-in code",
-                "Your one-time code is " + code + ". It expires in 5 minutes.");
-
-        byte[] buf = new byte[18];
-        random.nextBytes(buf);
-        String step1 = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
-        pending.put(step1, u.getUsername());
-
-        // In demo/simulated-mail mode the code is echoed to the UI so there's nothing to receive.
-        String demoCode = mailSimulate ? code : null;
-        return new LoginResponse(true, OtpService.maskEmail(u.getEmail()), step1, demoCode);
-    }
-
-    public SessionResponse verify(VerifyRequest req) {
-        String username = pending.get(req.step1Token());
-        if (username == null) {
-            throw new ResponseStatusException(UNAUTHORIZED, "login session expired — start again");
-        }
-        if (!otp.verify(username, req.code())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "incorrect or expired code");
-        }
-        pending.remove(req.step1Token());
-        AppUser u = users.findById(username)
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "unknown account"));
-        String token = sessions.issue(username);
-        audit.recordSelf(username, "login", username, "signed in with password + OTP");
+        String token = sessions.issue(u.getUsername());
+        audit.recordSelf(u.getUsername(), "login", u.getUsername(), "signed in with password");
         return new SessionResponse(token, MeMapper.of(u));
     }
 

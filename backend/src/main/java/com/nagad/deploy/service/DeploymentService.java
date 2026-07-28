@@ -107,15 +107,7 @@ public class DeploymentService {
             }
         }
 
-        // Governance gate: a deploy action requires an approved promotion per app+group.
-        if (req.actions().contains("deploy")) {
-            for (String app : req.apps()) {
-                promos.findFirstByGroupNameAndAppAndStatusOrderByDecidedAtDesc(g.cmd(), app, PromotionStatus.APPROVED)
-                        .orElseThrow(() -> new ResponseStatusException(CONFLICT,
-                                "no approved promotion for " + app + " in " + g.cmd() + " — fetch and get it approved first"));
-            }
-        }
-
+        // No approval gate: a fetched jar is deployable directly (super-admin approval retired).
         String id = "DP-" + seq.getAndIncrement();
         String cmd = runner.command(g.cmd(), hosts, req.apps(), req.actions());
         deployments.save(new Deployment(id, null, g.cmd(), AnsibleRunner.hostExpr(hosts),

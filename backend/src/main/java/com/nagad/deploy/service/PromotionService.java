@@ -72,16 +72,11 @@ public class PromotionService {
 
             Promotion p = new Promotion(id, app, destGroup, src.host(), jar, newHash, prevHash,
                     "release/8.2", estimateSize(jar), actor.getUsername());
+            // Approval gate retired: a fetched jar is immediately deployable.
+            p.decide(PromotionStatus.APPROVED, actor.getUsername(), null);
             promos.save(p);
             audit.record(actor.getUsername(), "fetch", id + " " + app,
                     "fetched " + jar + " (" + newHash + ") from " + src.host());
-
-            AppUser sa = users.findByRole(Role.SUPERADMIN).stream().findFirst().orElse(null);
-            if (sa != null) {
-                mail.send(sa.getEmail(), "Deploy approval needed — " + id + " " + app,
-                        actor.getName() + " fetched " + jar + " (" + newHash + ") from " + src.host()
-                                + " for group " + destGroup + ". Approve or deny in the console.");
-            }
             created.add(view(p));
         }
         return created;

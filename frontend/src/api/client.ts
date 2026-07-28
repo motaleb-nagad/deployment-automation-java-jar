@@ -50,6 +50,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 export const api = {
   get: <T>(p: string) => req<T>('GET', p),
   post: <T>(p: string, body?: unknown) => req<T>('POST', p, body),
+  del: <T>(p: string) => req<T>('DELETE', p),
   streamUrl: (p: string) => `/api${p}`,
 };
 

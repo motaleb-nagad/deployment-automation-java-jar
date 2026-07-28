@@ -36,6 +36,21 @@ public class AppUser {
 
     protected AppUser() {}
 
+    /** Create a new account (password already hashed). */
+    public AppUser(String username, String name, String email, Role role, String scope,
+                   boolean permR, boolean permW, boolean permX, String passwordHash) {
+        this.username = username;
+        this.name = name;
+        this.email = email;
+        this.role = role;
+        this.scope = scope;
+        this.permR = permR;
+        this.permW = permW;
+        this.permX = permX;
+        this.passwordHash = passwordHash;
+        this.createdAt = Instant.now();
+    }
+
     public boolean scopeAll() {
         return "all".equalsIgnoreCase(scope);
     }

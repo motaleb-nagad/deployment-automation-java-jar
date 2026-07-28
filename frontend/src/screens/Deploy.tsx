@@ -35,15 +35,13 @@ export function Deploy() {
   if (!groups || !group) return <main style={{ padding: 24, color: 'var(--color-neutral-500)' }}>loading…</main>;
 
   const scoped = me?.scope === 'all' || me?.scope?.split(',').map((x) => x.trim()).includes(group.cmd);
-  const approvedFor = (app: string) => group.apps.find((a) => a.key === app)?.approved ?? false;
   const isDeploy = actions.includes('deploy');
-  const unapproved = isDeploy ? apps.filter((a) => !approvedFor(a)) : [];
   const sharedNoStop = isDeploy && !actions.includes('stop') && apps.some((a) => MULTI_INSTANCE.has(a));
 
   const hostExpr = hosts.length === 0 ? 'all' : hosts.length === 1 ? hosts[0] : `${hosts[0]}..${hosts[hosts.length - 1]}`;
   const fullCmd = `./run.sh ${group.cmd} ${hostExpr} ${apps.join(',') || '<apps>'} ${actions.join(',')}`;
 
-  const canReview = apps.length > 0 && actions.length > 0 && hosts.length > 0 && unapproved.length === 0 && scoped;
+  const canReview = apps.length > 0 && actions.length > 0 && hosts.length > 0 && scoped;
   const needType = hosts.length > 1;
   const canExec = !!me?.x && (!needType || typed.trim() === group.cmd);
 
@@ -165,13 +163,6 @@ export function Deploy() {
               <div style={{ fontSize: 12, color: 'var(--color-neutral-200)' }}><strong style={{ fontFamily: 'var(--font-heading)', fontSize: 10, letterSpacing: '.12em', color: C.warn }}>SHARED JAR, NO STOP</strong><br />Deploying without stopping first replaces a jar that running JVMs hold open. Add the stop phase.</div>
             </div>
           )}
-          {unapproved.length > 0 && (
-            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: 12, borderLeft: '2px solid var(--color-accent)', background: 'color-mix(in srgb, var(--color-accent) 8%, transparent)' }}>
-              <div style={{ width: 10, height: 10, background: 'var(--color-accent)', marginTop: 3, flex: 'none' }} />
-              <div style={{ fontSize: 12, color: 'var(--color-neutral-200)' }}>Deploy is locked for {unapproved.join(', ')} — no approved promotion in {group.cmd}. Fetch and get it approved first.</div>
-            </div>
-          )}
-
           <button onClick={() => setStep('confirm')} disabled={!canReview} style={{ border: 0, background: 'var(--color-neutral-100)', color: 'var(--color-text)', cursor: 'pointer', padding: '13px 18px',
             fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 12, letterSpacing: '.1em', display: 'flex', justifyContent: 'flex-start', opacity: canReview ? 1 : 0.5 }}>REVIEW →</button>
           <div style={{ fontSize: 11, color: 'var(--color-neutral-500)' }}>{!scoped ? `You are not scoped to group ${group.cmd}.` : !me?.x ? 'Your role can build but not execute (no x permission).' : 'Nothing runs until you confirm on the next step.'}</div>
