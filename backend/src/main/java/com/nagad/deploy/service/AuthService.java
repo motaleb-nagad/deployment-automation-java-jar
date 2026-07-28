@@ -93,6 +93,47 @@ public class AuthService {
         return MeMapper.of(user);
     }
 
+    /**
+     * Forgot-password: mail a one-time temporary password to the account's registered address
+     * and force a change on the next sign-in. Works for any account, super admin included.
+     *
+     * <p>Account existence is never revealed — the response is identical whether or not the
+     * username matches, so this endpoint can't be used to enumerate accounts. The temporary
+     * password is generated with {@link SecureRandom}, stored only as a bcrypt hash, and never
+     * logged. In mail-simulate mode it is echoed back in the response (the same demo affordance
+     * as the emailed OTP code) so the flow is testable without a live relay; with a real relay
+     * it is delivered by email only.
+     */
+    @Transactional
+    public ForgotPasswordResponse forgotPassword(ForgotPasswordRequest req) {
+        String generic = "If that account exists, a temporary password has been emailed to its address.";
+        String username = req.username() == null ? "" : req.username().trim();
+        AppUser u = username.isEmpty() ? null : users.findById(username).orElse(null);
+        if (u == null) {
+            return new ForgotPasswordResponse(generic, null);
+        }
+
+        String temp = generateTempPassword();
+        u.resetPassword(encoder.encode(temp));
+        users.save(u);
+        mail.send(u.getEmail(), "Nagad Deploy Console — temporary password",
+                "A password reset was requested for your account (" + u.getUsername() + ").\n\n"
+                        + "Temporary password: " + temp + "\n\n"
+                        + "Sign in with it once — you will be asked to set a new password immediately. "
+                        + "If you did not request this, contact a super admin.");
+        // Never log the temporary password itself; record only that a reset was issued.
+        audit.recordSelf(u.getUsername(), "password-reset", u.getUsername(),
+                "temporary password issued and emailed");
+        return new ForgotPasswordResponse(generic, mailSimulate ? temp : null);
+    }
+
+    /** A strong, URL-safe one-time password (~16 chars) from {@link SecureRandom}. */
+    private String generateTempPassword() {
+        byte[] buf = new byte[12];
+        random.nextBytes(buf);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
+    }
+
     private boolean passwordOk(AppUser u, String password) {
         if (password == null) return false;
         if (demo) {

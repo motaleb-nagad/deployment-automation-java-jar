@@ -39,7 +39,7 @@ public class SecurityConfig {
             .cors(cors -> {})
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(reg -> reg
-                .requestMatchers("/api/auth/login", "/api/auth/verify").permitAll()
+                .requestMatchers("/api/auth/login", "/api/auth/verify", "/api/auth/forgot-password").permitAll()
                 // Deploy stream authorises itself with a single-use ticket (see DeploymentService).
                 .requestMatchers(HttpMethod.GET, "/api/deploy/stream").permitAll()
                 // Only health/info are exposed (see application.yml); permit just those probes.

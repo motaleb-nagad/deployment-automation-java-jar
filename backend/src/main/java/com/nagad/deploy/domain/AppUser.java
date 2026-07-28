@@ -63,6 +63,16 @@ public class AppUser {
         this.mustChangePassword = false;
     }
 
+    /**
+     * Install an admin/self-service issued temporary password (already hashed) and force a
+     * change on the next sign-in. Used by the forgot-password flow — the account can sign in
+     * with the temporary password once, then must set one of its own.
+     */
+    public void resetPassword(String temporaryHash) {
+        this.passwordHash = temporaryHash;
+        this.mustChangePassword = true;
+    }
+
     public boolean scopeAll() {
         return "all".equalsIgnoreCase(scope);
     }

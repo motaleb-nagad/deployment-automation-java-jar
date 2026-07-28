@@ -25,6 +25,16 @@ public class AuthController {
         return auth.login(req);
     }
 
+    /**
+     * Forgot-password: mail a one-time temporary password to the account's address. Public
+     * (pre-auth) and existence-agnostic — the response is the same whether or not the account
+     * exists, so it can't enumerate users.
+     */
+    @PostMapping("/forgot-password")
+    public ForgotPasswordResponse forgotPassword(@RequestBody ForgotPasswordRequest req) {
+        return auth.forgotPassword(req);
+    }
+
     @PostMapping("/logout")
     public void logout(HttpServletRequest request) {
         String header = request.getHeader("Authorization");

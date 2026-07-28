@@ -23,6 +23,13 @@ public final class Dtos {
     /** First-login (or self-service) password change: current password + the new one. */
     public record ChangePasswordRequest(String currentPassword, String newPassword) {}
 
+    /** Forgot-password: the account (username / email) to mail a temporary password to. */
+    public record ForgotPasswordRequest(String username) {}
+
+    /** Always the same generic message (existence is never revealed). {@code demoTempPassword}
+     *  is populated only in mail-simulate mode so the flow is testable without a live relay. */
+    public record ForgotPasswordResponse(String message, String demoTempPassword) {}
+
     // ---- promotion / approval ----
     public record FetchRequest(String srcGroup, List<String> apps) {}
 
