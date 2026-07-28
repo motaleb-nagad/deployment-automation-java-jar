@@ -33,6 +33,18 @@ public class FleetInventory {
         return groups.stream().filter(g -> g.cmd() != null).toList();
     }
 
+    /** The managed group a production host belongs to — used to route consolidated host:app pairs. */
+    public Optional<Group> groupForHost(String host) {
+        return managedGroups().stream()
+                .filter(g -> g.hosts().stream().anyMatch(h -> h.name().equals(host)))
+                .findFirst();
+    }
+
+    /** Every host across managed groups (consolidated targets can span all of them). */
+    public List<Host> managedHosts() {
+        return managedGroups().stream().flatMap(g -> g.hosts().stream()).toList();
+    }
+
     // ---- deterministic collector stand-ins (FNV-1a, matching the prototype) ----
 
     public long h32(String s) {

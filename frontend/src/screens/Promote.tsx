@@ -98,39 +98,56 @@ export function Promote() {
       )}
 
       {result && (
-        <div style={{ borderTop: rule2, paddingTop: 20, marginTop: 24, maxWidth: 1000 }}>
+        <div style={{ borderTop: rule2, paddingTop: 20, marginTop: 24, maxWidth: 1100, overflowX: 'auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
             <span style={{ width: 13, height: 13, background: C.run }} />
-            <h4 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Fetched — awaiting approval</h4>
+            <h4 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Fetched from staging</h4>
+            <div style={{ fontSize: 12, color: 'var(--color-neutral-500)' }}>hash read from the staged build, shown against what production runs now.</div>
           </div>
-          {result.map((pr) => (
-            <div key={pr.id} style={{ display: 'grid', gridTemplateColumns: '100px 170px 1fr 160px', gap: 14, padding: '12px 8px', borderBottom: rule1, alignItems: 'center', fontFamily: mono, fontSize: 12 }}>
-              <div style={{ color: 'var(--color-accent-400)', fontWeight: 700 }}>{pr.id}</div>
-              <div style={{ color: 'var(--color-neutral-100)' }}>{pr.app} <span style={{ color: 'var(--color-neutral-500)' }}>→ {pr.group}</span></div>
-              <div style={{ color: 'var(--color-neutral-400)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pr.jar}</div>
-              <div><span style={{ color: 'var(--color-neutral-500)' }}>{pr.prevHash}</span> → <span style={{ color: '#22c55e', fontWeight: 700 }}>{pr.hash}</span></div>
-            </div>
-          ))}
+          <FetchHeader />
+          {result.map((pr) => <FetchRow key={pr.id} pr={pr} />)}
         </div>
       )}
 
-      <section style={{ marginTop: 34 }}>
-        <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 6px' }}>MY RECENT REQUESTS</h6>
-        <div style={{ borderTop: rule2 }}>
-          {mine?.map((mr) => (
-            <div key={mr.id} style={{ display: 'grid', gridTemplateColumns: '90px 170px 1fr 150px 110px', gap: 14, padding: '10px 6px', borderBottom: rule1, alignItems: 'center', fontFamily: mono, fontSize: 11.5 }}>
-              <div style={{ color: 'var(--color-accent-400)' }}>{mr.id}</div>
-              <div style={{ color: 'var(--color-neutral-100)' }}>{mr.app} <span style={{ color: 'var(--color-neutral-500)' }}>→ {mr.group}</span></div>
-              <div style={{ color: 'var(--color-neutral-400)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mr.jar} · {mr.hash}</div>
-              <div style={{ color: 'var(--color-neutral-500)' }}>{mr.requestedAt}</div>
-              <StatusTag status={mr.status} />
-            </div>
-          ))}
-          {mine?.length === 0 && <div style={{ padding: '10px 6px', fontSize: 12, color: 'var(--color-neutral-500)' }}>No requests yet.</div>}
-        </div>
+      <section style={{ marginTop: 34, overflowX: 'auto' }}>
+        <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 6px' }}>FETCHED JARS — STAGING vs PRODUCTION</h6>
+        <FetchHeader />
+        {mine?.map((mr) => <FetchRow key={mr.id} pr={mr} />)}
+        {mine?.length === 0 && <div style={{ padding: '10px 6px', fontSize: 12, color: 'var(--color-neutral-500)' }}>Nothing fetched yet.</div>}
       </section>
     </main>
   );
+}
+
+const FETCH_COLS = '84px 150px 1fr 120px 120px 130px';
+
+function FetchHeader() {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: FETCH_COLS, gap: 14, padding: '6px 8px', borderTop: rule2, borderBottom: rule1,
+      fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
+      <div>REQ</div><div>APP → GROUP</div><div>JAR</div><div>STAGING HASH</div><div>PROD HASH</div><div>DEPLOYED?</div>
+    </div>
+  );
+}
+
+function FetchRow({ pr }: { pr: PromotionView }) {
+  const same = pr.hash === pr.prodHash;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: FETCH_COLS, gap: 14, padding: '11px 8px', borderBottom: rule1, alignItems: 'center', fontFamily: mono, fontSize: 11.5 }}>
+      <div style={{ color: 'var(--color-accent-400)', fontWeight: 700 }}>{pr.id}</div>
+      <div style={{ color: 'var(--color-neutral-100)' }}>{pr.app} <span style={{ color: 'var(--color-neutral-500)' }}>→ {pr.group}</span></div>
+      <div style={{ color: 'var(--color-neutral-400)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pr.jar}</div>
+      <div style={{ color: same ? 'var(--color-neutral-300)' : '#22c55e', fontWeight: 700 }}>{pr.hash}</div>
+      <div style={{ color: 'var(--color-neutral-300)' }}>{pr.prodHash}</div>
+      <DeployedFlag deployed={pr.deployed} />
+    </div>
+  );
+}
+
+function DeployedFlag({ deployed }: { deployed: boolean }) {
+  return deployed
+    ? <div style={{ justifySelf: 'start', padding: '2px 8px', background: 'var(--color-neutral-100)', color: 'var(--color-text)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>DEPLOYED</div>
+    : <div style={{ justifySelf: 'start', padding: '2px 8px', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>NOT DEPLOYED</div>;
 }
 
 export function StatusTag({ status }: { status: string }) {

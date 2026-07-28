@@ -30,6 +30,7 @@ public class PromotionService {
     private final AppUserRepository users;
     private final StagingCatalog staging;
     private final FleetInventory inv;
+    private final ProdHashService prodHash;
     private final MailService mail;
     private final AuditService audit;
 
@@ -38,11 +39,12 @@ public class PromotionService {
             DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm").withZone(ZoneOffset.UTC);
 
     public PromotionService(PromotionRepository promos, AppUserRepository users, StagingCatalog staging,
-                            FleetInventory inv, MailService mail, AuditService audit) {
+                            FleetInventory inv, ProdHashService prodHash, MailService mail, AuditService audit) {
         this.promos = promos;
         this.users = users;
         this.staging = staging;
         this.inv = inv;
+        this.prodHash = prodHash;
         this.mail = mail;
         this.audit = audit;
     }
@@ -98,8 +100,11 @@ public class PromotionService {
     }
 
     PromotionView view(Promotion p) {
+        boolean deployed = p.getStatus() == PromotionStatus.DEPLOYED;
+        // What production runs right now for this app — shown side by side with the fetched hash.
+        String currentProd = prodHash.current(p.getGroupName(), p.getApp());
         return new PromotionView(p.getId(), p.getApp(), p.getGroupName(), p.getSrcHost(), p.getJar(),
-                p.getGitHash(), p.getPrevHash(), p.getBranch(), p.getSizeLabel(),
+                p.getGitHash(), p.getPrevHash(), currentProd, deployed, p.getBranch(), p.getSizeLabel(),
                 p.getRequestedBy(), fmt(p.getRequestedAt()), p.getStatus().wire(),
                 p.getDecidedBy(), fmt(p.getDecidedAt()), p.getNote());
     }

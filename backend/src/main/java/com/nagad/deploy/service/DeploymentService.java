@@ -20,6 +20,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static org.springframework.http.HttpStatus.*;
 
@@ -38,6 +39,7 @@ public class DeploymentService {
     private final PromotionRepository promos;
     private final DeploymentRepository deployments;
     private final DeploymentFinalizer finalizer;
+    private final ProdHashService prodHash;
     private final ExecutorService executor;
 
     @Value("${nagad.ansible.simulate}")
@@ -53,16 +55,18 @@ public class DeploymentService {
     private final SecureRandom random = new SecureRandom();
 
     private record RunPlan(String deploymentId, String actor, Group group, List<String> hosts,
-                           List<String> apps, List<String> actions, String cmd, List<Line> lines) {}
+                           List<String> apps, List<String> actions, String cmd, List<Line> lines,
+                           boolean consolidated, List<DeployPair> pairs) {}
 
     public DeploymentService(FleetInventory inv, AnsibleRunner runner, PromotionRepository promos,
                              DeploymentRepository deployments, DeploymentFinalizer finalizer,
-                             ExecutorService runExecutor) {
+                             ProdHashService prodHash, ExecutorService runExecutor) {
         this.inv = inv;
         this.runner = runner;
         this.promos = promos;
         this.deployments = deployments;
         this.finalizer = finalizer;
+        this.prodHash = prodHash;
         this.executor = runExecutor;
     }
 
@@ -117,8 +121,86 @@ public class DeploymentService {
         random.nextBytes(buf);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
         pending.put(ticket, new RunPlan(id, actor.getUsername(), g, hosts, req.apps(), req.actions(), cmd,
-                runner.script(g, hosts, req.apps(), req.actions(), inv, cmd)));
+                runner.script(g, hosts, req.apps(), req.actions(), inv, cmd), false, null));
         return new DeployStartedResponse(id, ticket);
+    }
+
+    /**
+     * Consolidated (mixed-group) run — arbitrary host:app pairs spanning different groups in a
+     * single command. Validates every pair against the merged jar_map and the caller's scope,
+     * then registers the run exactly like a per-group deploy so it streams and finalizes the
+     * same way. Maps to the {@code ./deploy.sh "host:app host:app" actions} wrapper.
+     */
+    @Transactional
+    public DeployStartedResponse startConsolidated(AppUser actor, DeployConsolidatedRequest req) {
+        if (!actor.isPermX()) {
+            throw new ResponseStatusException(FORBIDDEN, "executing a deploy needs the execute (x) permission");
+        }
+        if (req.pairs() == null || req.pairs().isEmpty() || req.actions() == null || req.actions().isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "pick at least one host:app pair and one action");
+        }
+        for (String act : req.actions()) {
+            if (!Set.of("stop", "deploy", "start").contains(act)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown action " + act);
+            }
+        }
+
+        List<DeployPair> pairs = new ArrayList<>();
+        LinkedHashSet<String> hostSet = new LinkedHashSet<>();
+        LinkedHashSet<String> appSet = new LinkedHashSet<>();
+        for (DeployPair p : req.pairs()) {
+            String host = p.host() == null ? "" : p.host().trim();
+            String app = p.app() == null ? "" : p.app().trim();
+            if (!TOKEN.matcher(host).matches() || !TOKEN.matcher(app).matches()) {
+                throw new ResponseStatusException(BAD_REQUEST, "invalid host:app pair " + host + ":" + app);
+            }
+            Group hg = inv.groupForHost(host).orElseThrow(() ->
+                    new ResponseStatusException(BAD_REQUEST, "unknown host " + host));
+            if (!FleetInventory.JAR_MAP.containsKey(app)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown app " + app);
+            }
+            if (!actor.canAccessGroup(hg.cmd())) {
+                throw new ResponseStatusException(FORBIDDEN,
+                        "you are not scoped to group " + hg.cmd() + " (host " + host + ")");
+            }
+            pairs.add(new DeployPair(host, app));
+            hostSet.add(host);
+            appSet.add(app);
+        }
+
+        List<String> hosts = new ArrayList<>(hostSet);
+        List<String> apps = new ArrayList<>(appSet);
+        String id = "DP-" + seq.getAndIncrement();
+        String cmd = runner.consolidatedCommand(pairs, req.actions());
+        deployments.save(new Deployment(id, null, "consolidated", AnsibleRunner.hostExpr(hosts),
+                String.join(",", apps), String.join(",", req.actions()), actor.getUsername()));
+
+        byte[] buf = new byte[32];
+        random.nextBytes(buf);
+        String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
+        pending.put(ticket, new RunPlan(id, actor.getUsername(), null, hosts, apps, req.actions(), cmd,
+                runner.scriptConsolidated(pairs, req.actions(), inv, cmd), true, pairs));
+        return new DeployStartedResponse(id, ticket);
+    }
+
+    /** Resolve the review model for a set of consolidated pairs — group, jar, prod & target hashes. */
+    @Transactional(readOnly = true)
+    public List<ConsolidatedPairView> resolvePairs(AppUser actor, List<DeployPair> in) {
+        List<ConsolidatedPairView> out = new ArrayList<>();
+        if (in == null) return out;
+        for (DeployPair p : in) {
+            String host = p.host() == null ? "" : p.host().trim();
+            String app = p.app() == null ? "" : p.app().trim();
+            Group hg = inv.groupForHost(host).orElse(null);
+            if (hg == null || !FleetInventory.JAR_MAP.containsKey(app)) continue;
+            String jar = FleetInventory.JAR_MAP.getOrDefault(app, app + "-1.0.jar");
+            String prod = prodHash.current(hg.cmd(), app);
+            Optional<Promotion> ap = promos.findFirstByGroupNameAndAppAndStatusOrderByDecidedAtDesc(
+                    hg.cmd(), app, PromotionStatus.APPROVED);
+            out.add(new ConsolidatedPairView(host, hg.cmd(), app, jar, prod,
+                    ap.map(Promotion::getGitHash).orElse(null), ap.isPresent()));
+        }
+        return out;
     }
 
     /** SSE stream of the run, authorised by the single-use ticket from {@link #start}. */
@@ -141,8 +223,11 @@ public class DeploymentService {
     private void runStream(RunPlan plan, SseEmitter emitter) {
         try {
             String lastLog = simulate ? streamScripted(plan, emitter) : streamReal(plan, emitter);
-            List<Map<String, String>> rows = finalizer.commit(plan.deploymentId(), plan.actor(),
-                    plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
+            List<Map<String, String>> rows = plan.consolidated()
+                    ? finalizer.commitConsolidated(plan.deploymentId(), plan.actor(), plan.pairs(),
+                            plan.actions(), plan.cmd(), lastLog)
+                    : finalizer.commit(plan.deploymentId(), plan.actor(), plan.group().cmd(),
+                            plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
                     "deploymentId", plan.deploymentId(), "result", "ok", "rows", rows)));
             emitter.complete();
@@ -167,7 +252,7 @@ public class DeploymentService {
     /** Production: SSH to the jump host, run the real wrapper, stream stdout. Non-zero exit fails the run. */
     private String streamReal(RunPlan plan, SseEmitter emitter) throws IOException, InterruptedException {
         StringBuilder lastLog = new StringBuilder();
-        int code = runner.execute(plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), ln -> {
+        Consumer<Line> sink = ln -> {
             try {
                 sendLine(emitter, ln);
                 if (ln.text() != null && !ln.text().isBlank()) {
@@ -177,9 +262,12 @@ public class DeploymentService {
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
-        });
+        };
+        int code = plan.consolidated()
+                ? runner.executeConsolidated(plan.pairs(), plan.actions(), sink)
+                : runner.execute(plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), sink);
         if (code != 0) {
-            throw new IllegalStateException("run.sh exited with code " + code);
+            throw new IllegalStateException((plan.consolidated() ? "deploy.sh" : "run.sh") + " exited with code " + code);
         }
         return lastLog.toString();
     }
@@ -201,7 +289,7 @@ public class DeploymentService {
                 Optional<Promotion> ap = promos.findFirstByGroupNameAndAppAndStatusOrderByDecidedAtDesc(
                         g.cmd(), s.key(), PromotionStatus.APPROVED);
                 return new DeployAppView(s.key(), s.jar(), ap.isPresent(),
-                        ap.map(Promotion::getGitHash).orElse(null));
+                        ap.map(Promotion::getGitHash).orElse(null), prodHash.current(g.cmd(), s.key()));
             }).toList();
             out.add(new DeployGroupView(g.key(), g.cmd(), g.zone(), g.tier(),
                     g.hosts().stream().map(FleetInventory.Host::name).toList(), apps));

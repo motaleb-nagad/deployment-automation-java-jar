@@ -31,16 +31,19 @@ public class DeploymentFinalizer {
     private final DeploymentRepository deployments;
     private final MailService mail;
     private final AuditService audit;
+    private final ProdHashService prodHash;
     private final ObjectMapper json = new ObjectMapper();
 
     public DeploymentFinalizer(FleetInventory inv, PromotionRepository promos, JarRegistryRepository registry,
-                               DeploymentRepository deployments, MailService mail, AuditService audit) {
+                               DeploymentRepository deployments, MailService mail, AuditService audit,
+                               ProdHashService prodHash) {
         this.inv = inv;
         this.promos = promos;
         this.registry = registry;
         this.deployments = deployments;
         this.mail = mail;
         this.audit = audit;
+        this.prodHash = prodHash;
     }
 
     @Transactional
@@ -51,7 +54,7 @@ public class DeploymentFinalizer {
         boolean isDeploy = actions.contains("deploy");
 
         for (String app : apps) {
-            String before = inv.hash(groupCmd, app);
+            String before = prodHash.current(groupCmd, app);
             String after = before;
             if (isDeploy) {
                 Optional<Promotion> approved = promos
@@ -77,6 +80,52 @@ public class DeploymentFinalizer {
         audit.record(actor, "deploy", groupCmd + " " + String.join(",", apps),
                 String.join(",", actions) + " " + AnsibleRunner.hostExpr(hosts) + " → " + finalAfter);
         mail.send("devops-team@nagad.com.bd", "Deploy complete — " + deploymentId, "Ran " + cmd);
+        return rows;
+    }
+
+    /**
+     * Consolidated commit — one row per host:app pair (not a cartesian product), each routed to
+     * the group its host belongs to. Advances the registry and marks promotions deployed exactly
+     * as the per-group path does.
+     */
+    @Transactional
+    public List<Map<String, String>> commitConsolidated(String deploymentId, String actor,
+                                                        List<com.nagad.deploy.dto.Dtos.DeployPair> pairs,
+                                                        List<String> actions, String cmd, String lastLogLine) {
+        List<Map<String, String>> rows = new ArrayList<>();
+        boolean isDeploy = actions.contains("deploy");
+
+        for (var p : pairs) {
+            String host = p.host(), app = p.app();
+            FleetInventory.Group g = inv.groupForHost(host).orElse(null);
+            String group = g != null ? g.cmd() : "consolidated";
+            String before = prodHash.current(group, app);
+            String after = before;
+            if (isDeploy && g != null) {
+                Optional<Promotion> approved = promos
+                        .findFirstByGroupNameAndAppAndStatusOrderByDecidedAtDesc(group, app, PromotionStatus.APPROVED);
+                if (approved.isPresent()) {
+                    Promotion pr = approved.get();
+                    after = pr.getGitHash();
+                    pr.markDeployed();
+                    final String g2 = group;
+                    registry.findById(new JarRegistry.Key(app, group)).ifPresentOrElse(
+                            r -> r.updateHash(pr.getGitHash(), actor),
+                            () -> registry.save(new JarRegistry(app, g2, pr.getJar(), pr.getGitHash(), actor)));
+                }
+            }
+            rows.add(Map.of("host", host, "app", app, "before", before, "after", after,
+                    "verdict", before.equals(after) ? "unchanged" : "changed"));
+        }
+
+        String finalAfter = rows.isEmpty() ? "-" : rows.get(rows.size() - 1).get("after");
+        deployments.findById(deploymentId).ifPresent(d ->
+                d.complete("ok", "—", serialize(rows), lastLogLine));
+        String targets = pairs.stream().map(p -> p.host() + ":" + p.app())
+                .collect(java.util.stream.Collectors.joining(" "));
+        audit.record(actor, "deploy", "consolidated " + targets,
+                String.join(",", actions) + " → " + finalAfter);
+        mail.send("devops-team@nagad.com.bd", "Consolidated deploy complete — " + deploymentId, "Ran " + cmd);
         return rows;
     }
 

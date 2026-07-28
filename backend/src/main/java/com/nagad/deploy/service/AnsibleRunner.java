@@ -1,5 +1,6 @@
 package com.nagad.deploy.service;
 
+import com.nagad.deploy.dto.Dtos.DeployPair;
 import com.nagad.deploy.service.FleetInventory.Group;
 import com.nagad.deploy.service.FleetInventory.Svc;
 import org.springframework.beans.factory.annotation.Value;
@@ -71,6 +72,44 @@ public class AnsibleRunner {
         if (hosts.isEmpty()) return "all";
         if (hosts.size() == 1) return hosts.get(0);
         return hosts.get(0) + ".." + hosts.get(hosts.size() - 1);
+    }
+
+    /** The consolidated wrapper command: {@code ./deploy.sh "host:app host:app" actions}. */
+    public String consolidatedCommand(List<DeployPair> pairs, List<String> actions) {
+        String tokens = pairs.stream().map(p -> p.host() + ":" + p.app())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return "./deploy.sh \"" + tokens + "\" " + String.join(",", actions);
+    }
+
+    // ---- consolidated real execution (production) -------------------------------------------
+
+    /**
+     * SSH to the jump host and run the consolidated {@code ./deploy.sh} wrapper for the given
+     * host:app pairs, streaming each stdout line to {@code sink}. Returns the wrapper's exit code.
+     */
+    public int executeConsolidated(List<DeployPair> pairs, List<String> actions, Consumer<Line> sink)
+            throws IOException, InterruptedException {
+        String tokens = pairs.stream().map(p -> p.host() + ":" + p.app())
+                .collect(java.util.stream.Collectors.joining(" "));
+        String actionsCsv = String.join(",", actions);
+
+        String remote = "cd " + shq(workingDir) + " && ./deploy.sh " + shq(tokens) + " " + shq(actionsCsv);
+        sink.accept(Line.log("user", "$ ./deploy.sh \"" + tokens + "\" " + actionsCsv));
+
+        ProcessBuilder pb = new ProcessBuilder(sshArgv(remote));
+        pb.redirectErrorStream(true);
+        Process proc = pb.start();
+        String currentAction = firstActionOf(actions);
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+            String raw;
+            while ((raw = r.readLine()) != null) {
+                String a = actionFromTask(raw);
+                if (a != null) currentAction = a;
+                sink.accept(classify(raw, currentAction));
+            }
+        }
+        return proc.waitFor();
     }
 
     // ---- real execution (production) --------------------------------------------------------
@@ -244,6 +283,44 @@ public class AnsibleRunner {
         int perHost = 1 + actions.size() * apps.size();
         for (String h : hosts) {
             out.add(Line.log("ok", pad(h) + ": ok=" + perHost + "  changed=" + (actions.size() * apps.size())
+                    + "  unreachable=0  failed=0"));
+        }
+        out.add(Line.log("dim", "Report emailed to devops-team@nagad.com.bd"));
+        return out;
+    }
+
+    /** Demo mode for a consolidated run — scripted mixed-group output, one task per host:app pair. */
+    public List<Line> scriptConsolidated(List<DeployPair> pairs, List<String> actions,
+                                         FleetInventory inv, String cmd) {
+        List<Line> out = new ArrayList<>();
+        out.add(Line.log("user", "$ " + cmd));
+        out.add(Line.log("ink", stars("PLAY [consolidated]")));
+        out.add(Line.log("task", stars("TASK [Gathering Facts]")));
+        List<String> hosts = new ArrayList<>();
+        for (DeployPair p : pairs) if (!hosts.contains(p.host())) hosts.add(p.host());
+        for (String h : hosts) out.add(Line.log("ok", "ok: [nagad-" + h + "]"));
+
+        for (String a : actions) {
+            for (DeployPair p : pairs) {
+                String app = p.app(), h = p.host();
+                String jar = FleetInventory.JAR_MAP.getOrDefault(app, app + "-1.0.jar");
+                out.add(Line.log("task", stars("TASK [" + a + " : " + app + " @ " + h + "]")));
+                long pid = inv.pid("cons" + h + app);
+                String text = switch (a) {
+                    case "stop" -> "changed: [nagad-" + h + "] => " + app + " pid " + pid + " stopped";
+                    case "deploy" -> "changed: [nagad-" + h + "] => " + jar
+                            + " -> /home/" + app + "/was/ (backup: " + jar + ".1753257821~)";
+                    default -> "changed: [nagad-" + h + "] => " + app + " started, pid "
+                            + inv.pid("cons" + h + app + "n") + " — verified running";
+                };
+                out.add(Line.host("ch", text, h, a, "done"));
+            }
+        }
+        out.add(Line.log("ink", stars("PLAY RECAP")));
+        for (String h : hosts) {
+            long appsOnHost = pairs.stream().filter(p -> p.host().equals(h)).count();
+            long changed = actions.size() * appsOnHost;
+            out.add(Line.log("ok", pad(h) + ": ok=" + (1 + changed) + "  changed=" + changed
                     + "  unreachable=0  failed=0"));
         }
         out.add(Line.log("dim", "Report emailed to devops-team@nagad.com.bd"));

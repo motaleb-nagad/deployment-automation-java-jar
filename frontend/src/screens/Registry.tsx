@@ -19,6 +19,11 @@ export function Registry() {
       <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
         <div>APP</div><div>GROUP</div><div>JAR</div><div>PROD HASH</div><div>LATEST HASH</div><div>STATUS</div><div>BY</div>
       </div>
+      {data?.length === 0 && (
+        <div style={{ padding: '14px 8px', fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-500)' }}>
+          No governed jars yet — a jar appears here once it has been fetched from staging or deployed to production.
+        </div>
+      )}
       {data?.map((rg) => (
         <div key={rg.app + rg.group} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '9px 8px', borderBottom: rule1, fontFamily: mono, fontSize: 11.5, alignItems: 'center' }}>
           <div style={{ color: 'var(--color-neutral-100)' }}>{rg.app}</div>
