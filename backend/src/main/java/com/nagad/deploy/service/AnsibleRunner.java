@@ -38,6 +38,7 @@ public class AnsibleRunner {
     }
 
     private final String workingDir;
+    private final String portalUiDir;
     private final String sshHost;
     private final int sshPort;
     private final String sshUser;
@@ -50,12 +51,14 @@ public class AnsibleRunner {
 
     public AnsibleRunner(
             @Value("${nagad.ansible.working-dir}") String workingDir,
+            @Value("${nagad.ansible.portal-ui.working-dir:/home/konasl/motaleb-ansible/portalui-deployment}") String portalUiDir,
             @Value("${nagad.ansible.ssh.host:host.docker.internal}") String sshHost,
             @Value("${nagad.ansible.ssh.port:40167}") int sshPort,
             @Value("${nagad.ansible.ssh.user:konasl}") String sshUser,
             @Value("${nagad.ansible.ssh.key:/run/secrets/deploy_key}") String sshKeyPath,
             @Value("${nagad.ansible.ssh.strict-host-key-checking:false}") boolean strictHostKey) {
         this.workingDir = workingDir;
+        this.portalUiDir = portalUiDir;
         this.sshHost = sshHost;
         this.sshPort = sshPort;
         this.sshUser = sshUser;
@@ -145,6 +148,131 @@ public class AnsibleRunner {
             }
         }
         return proc.waitFor();
+    }
+
+    // ---- portal-ui channel ------------------------------------------------------------------
+
+    /** The portal-ui run.sh command line: {@code ./run.sh <uis> [date] [--mode] [--no-*] [-h hosts]}. */
+    public String portalUiCommand(String mode, List<String> uis, List<String> hosts,
+                                  boolean fixUrl, boolean fixSize, String date) {
+        StringBuilder sb = new StringBuilder("./run.sh ").append(String.join(",", uis));
+        if (date != null && !date.isBlank()) sb.append(' ').append(date.trim());
+        switch (mode) {
+            case "fetch" -> sb.append(" --fetch");
+            case "rollback" -> sb.append(" --rollback");
+            case "verify" -> sb.append(" --verify");
+            default -> { /* deploy: no mode flag */ }
+        }
+        if ("deploy".equals(mode)) {
+            if (!fixUrl) sb.append(" --no-url-fix");
+            if (!fixSize) sb.append(" --no-size-fix");
+        }
+        if (("deploy".equals(mode) || "rollback".equals(mode)) && hosts != null && !hosts.isEmpty()) {
+            sb.append(" -h ").append(String.join(",", hosts));
+        }
+        return sb.toString();
+    }
+
+    /** SSH to the jump host and run the portal-ui wrapper, streaming stdout. Returns exit code. */
+    public int executePortalUi(String mode, List<String> uis, List<String> hosts,
+                               boolean fixUrl, boolean fixSize, String date, Consumer<Line> sink)
+            throws IOException, InterruptedException {
+        String cmd = portalUiCommand(mode, uis, hosts, fixUrl, fixSize, date);
+        String remote = "cd " + shq(portalUiDir) + " && " + cmd;
+        sink.accept(Line.log("user", "$ " + cmd));
+
+        ProcessBuilder pb = new ProcessBuilder(sshArgv(remote));
+        pb.redirectErrorStream(true);
+        Process proc = pb.start();
+        String currentAction = mode;
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+            String raw;
+            while ((raw = r.readLine()) != null) {
+                String a = actionFromTask(raw);
+                if (a != null) currentAction = a;
+                sink.accept(classify(raw, currentAction));
+            }
+        }
+        return proc.waitFor();
+    }
+
+    /** Rail phases shown per host for a portal-ui mode (kept in sync with the frontend). */
+    public static List<String> portalUiPhases(String mode) {
+        return switch (mode) {
+            case "fetch" -> List.of("fetch");
+            case "rollback" -> List.of("snapshot", "rollback");
+            case "verify" -> List.of("verify");
+            default -> List.of("backup", "deploy", "fixes"); // deploy
+        };
+    }
+
+    /** Demo mode: scripted portal-ui output per host×ui for the chosen mode. */
+    public List<Line> scriptPortalUi(String mode, List<String> uis, List<String> hosts,
+                                     boolean fixUrl, boolean fixSize, String date,
+                                     FleetInventory inv, String cmd) {
+        List<Line> out = new ArrayList<>();
+        out.add(Line.log("user", "$ " + cmd));
+        String play = switch (mode) {
+            case "fetch" -> "PLAY [portal-ui fetch — stg-portal]";
+            case "rollback" -> "PLAY [portal-ui rollback — nagad-web-dmz]";
+            case "verify" -> "PLAY [portal-ui verify — fetched vs staging]";
+            default -> "PLAY [portal-ui deploy — nagad-web-dmz]";
+        };
+        out.add(Line.log("ink", stars(play)));
+        out.add(Line.log("task", stars("TASK [Validate ui names]")));
+        for (String h : hosts) out.add(Line.log("ok", "ok: [nagad-" + h + "]"));
+
+        String bkpDate = (date == null || date.isBlank()) ? "today" : date.trim();
+        for (String ui : uis) {
+            switch (mode) {
+                case "fetch" -> {
+                    out.add(Line.log("task", stars("TASK [fetchui : " + ui + " from staging]")));
+                    for (String h : hosts) out.add(Line.host("ch", "changed: [" + h + "] => pulled "
+                            + ui + " → roles/portalui/files/" + ui + ".tar.gz (md5 "
+                            + Long.toHexString(inv.h32("pui" + ui)).substring(0, 8) + ")", h, "fetch", "done"));
+                }
+                case "verify" -> {
+                    out.add(Line.log("task", stars("TASK [verify : " + ui + "]")));
+                    boolean match = inv.h32("puiverify" + ui) % 2 == 0;
+                    for (String h : hosts) out.add(Line.host(match ? "ok" : "ch",
+                            (match ? "ok" : "changed") + ": [" + h + "] => " + ui
+                                    + (match ? " matches live staging" : " DIFFERS from live staging (see report)"),
+                            h, "verify", "done"));
+                }
+                case "rollback" -> {
+                    for (String h : hosts) {
+                        out.add(Line.log("task", stars("TASK [snapshot current " + ui + " @ " + h + "]")));
+                        out.add(Line.host("ch", "changed: [nagad-" + h + "] => saved "
+                                + ui + ".prerollback." + inv.h32(ui + h) + ".tar.gz", h, "snapshot", "done"));
+                        out.add(Line.log("task", stars("TASK [rollback " + ui + " @ " + h + "]")));
+                        out.add(Line.host("ch", "changed: [nagad-" + h + "] => restored "
+                                + ui + " from backup " + bkpDate, h, "rollback", "done"));
+                    }
+                }
+                default -> { // deploy
+                    for (String h : hosts) {
+                        out.add(Line.log("task", stars("TASK [backup " + ui + " @ " + h + "]")));
+                        out.add(Line.host("ch", "changed: [nagad-" + h + "] => ui/backup/"
+                                + ui + "." + bkpDate + ".tar.gz", h, "backup", "done"));
+                        out.add(Line.log("task", stars("TASK [deploy " + ui + " @ " + h + "]")));
+                        out.add(Line.host("ch", "changed: [nagad-" + h + "] => extracted "
+                                + ui + ".tar.gz → /usr/local/nginx/html/ui/" + ui, h, "deploy", "done"));
+                        if (fixUrl || fixSize) {
+                            out.add(Line.log("task", stars("TASK [urlfix " + ui + " @ " + h + "]")));
+                            String detail = (fixUrl ? "host swap OK" : "url-fix skipped")
+                                    + " · " + (fixSize ? "MAX_FILE_SIZE=10485760" : "size-fix skipped");
+                            out.add(Line.host("ch", "changed: [nagad-" + h + "] => " + detail, h, "fixes", "done"));
+                        }
+                    }
+                }
+            }
+        }
+        out.add(Line.log("ink", stars("PLAY RECAP")));
+        for (String h : hosts) out.add(Line.log("ok", pad(h) + ": ok=1  changed="
+                + (uis.size() * portalUiPhases(mode).size()) + "  unreachable=0  failed=0"));
+        out.add(Line.log("dim", "Report emailed to devops-team@nagad.com.bd"));
+        return out;
     }
 
     /** The working directory the wrapper + inventory live in on the jump host. */

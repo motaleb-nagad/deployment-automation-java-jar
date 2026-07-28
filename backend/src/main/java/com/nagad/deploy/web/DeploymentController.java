@@ -55,6 +55,18 @@ public class DeploymentController {
         return deployments.stream(ticket);
     }
 
+    /** Portal-UI channel catalog: UIs, modes, prod DMZ hosts and the staging source. */
+    @GetMapping("/deploy/portal-ui")
+    public PortalUiCatalog portalUiCatalog() {
+        return deployments.portalUiCatalog();
+    }
+
+    /** Validate and register a portal-ui run (fetch/deploy/rollback/verify); returns the id to stream. */
+    @PostMapping("/deploy/portal-ui")
+    public DeployStartedResponse startPortalUi(@RequestBody PortalUiRequest req) {
+        return deployments.startPortalUi(current.require(), req);
+    }
+
     @GetMapping("/deployments")
     public List<DeploymentView> history() {
         return deployments.history();

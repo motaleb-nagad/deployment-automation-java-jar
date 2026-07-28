@@ -39,6 +39,14 @@ export interface DeployGroup {
 }
 
 export interface DeployPair { host: string; app: string; }
+
+export interface PortalUiHost { host: string; ip: string; }
+export interface PortalUiCatalog {
+  uis: string[]; modes: string[]; prodHosts: PortalUiHost[]; staging: PortalUiHost;
+}
+export interface PortalUiRequest {
+  mode: string; uis: string[]; hosts: string[]; fixUrl: boolean; fixSize: boolean; date: string;
+}
 export interface ConsolidatedPairView {
   host: string; group: string; app: string; jar: string;
   prodHash: string; targetHash: string | null; approved: boolean;
