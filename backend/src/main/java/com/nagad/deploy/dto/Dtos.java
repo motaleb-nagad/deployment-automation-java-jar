@@ -26,8 +26,11 @@ public final class Dtos {
     // ---- promotion / approval ----
     public record FetchRequest(String srcGroup, List<String> apps) {}
 
+    /** hash = the fetched staging build's hash; prodHash = what production runs right now;
+     *  deployed = whether this fetched jar has been rolled out to production yet. */
     public record PromotionView(String id, String app, String group, String srcHost, String jar,
-                                String hash, String prevHash, String branch, String size,
+                                String hash, String prevHash, String prodHash, boolean deployed,
+                                String branch, String size,
                                 String requestedBy, String requestedAt, String status,
                                 String decidedBy, String decidedAt, String note) {}
 
@@ -37,11 +40,24 @@ public final class Dtos {
     public record DeployRequest(String group, List<String> hosts, List<String> apps,
                                 List<String> actions, String sudoPassword) {}
 
+    /** One host:app target of a consolidated (mixed-group) run. */
+    public record DeployPair(String host, String app) {}
+
+    /** Consolidated deploy — arbitrary host:app pairs spanning different groups, one run.
+     *  Maps to the {@code ./deploy.sh "host:app host:app" actions} wrapper. */
+    public record DeployConsolidatedRequest(List<DeployPair> pairs, List<String> actions) {}
+
+    /** A resolved consolidated target for the review step: the host, its group, the app,
+     *  the jar, current prod hash and the target (fetched) hash if one is approved. */
+    public record ConsolidatedPairView(String host, String group, String app, String jar,
+                                       String prodHash, String targetHash, boolean approved) {}
+
     /** streamTicket is a single-use, short-lived credential for opening the SSE stream —
      *  it keeps the long-lived bearer token out of the stream URL (and therefore out of logs). */
     public record DeployStartedResponse(String deploymentId, String streamTicket) {}
 
-    public record DeployAppView(String key, String jar, boolean approved, String approvedHash) {}
+    /** prodHash = what production runs right now; approvedHash = the fetched jar staged to deploy. */
+    public record DeployAppView(String key, String jar, boolean approved, String approvedHash, String prodHash) {}
 
     public record DeployGroupView(String key, String cmd, String zone, String tier,
                                   List<String> hosts, List<DeployAppView> apps) {}

@@ -33,6 +33,18 @@ public class DeploymentController {
         return deployments.start(current.require(), req);
     }
 
+    /** Resolve consolidated host:app pairs into the review model (group, jar, prod & target hashes). */
+    @PostMapping("/deploy/consolidated/resolve")
+    public List<ConsolidatedPairView> resolvePairs(@RequestBody DeployConsolidatedRequest req) {
+        return deployments.resolvePairs(current.require(), req.pairs());
+    }
+
+    /** Validate and register a consolidated (mixed-group) run; returns the id to stream. */
+    @PostMapping("/deploy/consolidated")
+    public DeployStartedResponse startConsolidated(@RequestBody DeployConsolidatedRequest req) {
+        return deployments.startConsolidated(current.require(), req);
+    }
+
     /**
      * Live per-host / terminal output for a run. Authorised by the single-use stream ticket
      * returned from POST /deploy (EventSource cannot send an Authorization header, so a

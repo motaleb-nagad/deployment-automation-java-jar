@@ -21,7 +21,8 @@ export interface FleetView {
 
 export interface PromotionView {
   id: string; app: string; group: string; srcHost: string; jar: string;
-  hash: string; prevHash: string | null; branch: string | null; size: string | null;
+  hash: string; prevHash: string | null; prodHash: string; deployed: boolean;
+  branch: string | null; size: string | null;
   requestedBy: string; requestedAt: string; status: string;
   decidedBy: string | null; decidedAt: string | null; note: string | null;
 }
@@ -30,9 +31,17 @@ export interface StagingSource {
   key: string; host: string; ip: string; apps: string[];
 }
 
-export interface DeployApp { key: string; jar: string; approved: boolean; approvedHash: string | null; }
+export interface DeployApp {
+  key: string; jar: string; approved: boolean; approvedHash: string | null; prodHash: string;
+}
 export interface DeployGroup {
   key: string; cmd: string; zone: string; tier: string; hosts: string[]; apps: DeployApp[];
+}
+
+export interface DeployPair { host: string; app: string; }
+export interface ConsolidatedPairView {
+  host: string; group: string; app: string; jar: string;
+  prodHash: string; targetHash: string | null; approved: boolean;
 }
 
 export interface DeploymentView {
