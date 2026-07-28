@@ -3,15 +3,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, openDeployStream, type ResultRow } from '../api/client';
 import { useApp } from '../store/app';
 import { C, rule1, rule2, TERM } from '../theme/colors';
-import type { DeployGroup, DeployPair, ConsolidatedPairView, PortalUiCatalog } from '../api/types';
+import type { DeployGroup, DeployPair, ConsolidatedPairView } from '../api/types';
+import { PortalUi } from './PortalUi';
 
 const mono = 'var(--mono)';
 const MULTI_INSTANCE = new Set(['apigw', 'apigw-summary']);
 type Step = 'build' | 'confirm' | 'running' | 'result';
 type Mode = 'group' | 'consolidated' | 'portal-ui';
-
-const puPhasesFor = (m: string): string[] =>
-  m === 'fetch' ? ['fetch'] : m === 'rollback' ? ['snapshot', 'rollback'] : m === 'verify' ? ['verify'] : ['backup', 'deploy', 'fixes'];
 interface TermLine { level: string; text: string; }
 
 /** A row in the review step: one service, its actions, and (deploy only) the hash change. */
@@ -21,7 +19,6 @@ export function Deploy() {
   const { me, flash } = useApp();
   const qc = useQueryClient();
   const { data: groups } = useQuery({ queryKey: ['deploy', 'groups'], queryFn: () => api.get<DeployGroup[]>('/deploy/groups') });
-  const { data: puCatalog } = useQuery({ queryKey: ['deploy', 'portal-ui'], queryFn: () => api.get<PortalUiCatalog>('/deploy/portal-ui') });
 
   const [mode, setMode] = useState<Mode>('group');
   const [step, setStep] = useState<Step>('build');
@@ -44,14 +41,6 @@ export function Deploy() {
   const [cHosts, setCHosts] = useState<string[]>([]);
   const [cApps, setCApps] = useState<string[]>([]);
   const [pairReview, setPairReview] = useState<ConsolidatedPairView[]>([]);
-
-  // ---- portal-ui channel state ----
-  const [puMode, setPuMode] = useState<string>('deploy');
-  const [puUis, setPuUis] = useState<string[]>([]);
-  const [puHosts, setPuHosts] = useState<string[]>([]);
-  const [puFixUrl, setPuFixUrl] = useState(true);
-  const [puFixSize, setPuFixSize] = useState(true);
-  const [puDate, setPuDate] = useState('');
 
   const scopeList = me?.scope === 'all' ? null : me?.scope?.split(',').map((x) => x.trim()) ?? [];
   const scopedGroups = useMemo(() => (groups ?? []).filter((g) => !scopeList || scopeList.includes(g.cmd)), [groups, me]); // eslint-disable-line
@@ -78,32 +67,13 @@ export function Deploy() {
   const consolidatedCmd = `./deploy.sh "${pairTokens || '<host:app …>'}" ${actions.join(',')}`;
   const distinctPairHosts = [...new Set(effectivePairs.map((p) => p.host))];
 
-  // portal-ui derived
-  const puAllHosts = puCatalog?.prodHosts.map((h) => h.host) ?? [];
-  const puStaging = puCatalog?.staging.host ?? '';
-  const puRailHosts = (puMode === 'fetch' || puMode === 'verify')
-    ? (puStaging ? [puStaging] : [])
-    : (puHosts.length ? puHosts : puAllHosts);
-  const puPhases = puPhasesFor(puMode);
-  const portalUiCmd = (() => {
-    let s = `./run.sh ${puUis.join(',') || '<ui>'}`;
-    if (puDate) s += ` ${puDate}`;
-    if (puMode === 'fetch') s += ' --fetch'; else if (puMode === 'rollback') s += ' --rollback'; else if (puMode === 'verify') s += ' --verify';
-    if (puMode === 'deploy') { if (!puFixUrl) s += ' --no-url-fix'; if (!puFixSize) s += ' --no-size-fix'; }
-    if ((puMode === 'deploy' || puMode === 'rollback') && puHosts.length) s += ` -h ${puHosts.join(',')}`;
-    return s;
-  })();
-
   const canReview = mode === 'group'
     ? (apps.length > 0 && actions.length > 0 && hosts.length > 0 && scoped)
-    : mode === 'consolidated'
-    ? (effectivePairs.length > 0 && actions.length > 0)
-    : (puUis.length > 0);
+    : (effectivePairs.length > 0 && actions.length > 0);
 
-  const railHosts = mode === 'group' ? hosts : mode === 'consolidated' ? distinctPairHosts : puRailHosts;
-  const runPhases = mode === 'portal-ui' ? puPhases : actions;
+  const railHosts = mode === 'group' ? hosts : distinctPairHosts;
   const needType = railHosts.length > 1;
-  const armToken = mode === 'group' ? group.cmd : mode === 'consolidated' ? 'deploy' : puMode;
+  const armToken = mode === 'group' ? group.cmd : 'deploy';
   const canExec = !!me?.x && (!needType || typed.trim() === armToken);
 
   const toggle = <T,>(arr: T[], v: T): T[] => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
@@ -112,7 +82,6 @@ export function Deploy() {
     setStep('build'); setApps([]); setActions(['stop', 'deploy', 'start']); setTyped('');
     setLines([]); setRail({}); setResult([]); setDone(false);
     setPairs([]); setCHosts([]); setCApps([]); setPairReview([]);
-    setPuUis([]); setPuHosts([]); setPuDate('');
   }
 
   // Switching group folds the current live selection into the committed set so nothing is lost.
@@ -153,10 +122,8 @@ export function Deploy() {
     try {
       const body = mode === 'group'
         ? { group: group!.cmd, hosts, apps, actions }
-        : mode === 'consolidated'
-        ? { pairs: effectivePairs, actions }
-        : { mode: puMode, uis: puUis, hosts: puHosts, fixUrl: puFixUrl, fixSize: puFixSize, date: puDate };
-      const path = mode === 'group' ? '/deploy' : mode === 'consolidated' ? '/deploy/consolidated' : '/deploy/portal-ui';
+        : { pairs: effectivePairs, actions };
+      const path = mode === 'group' ? '/deploy' : '/deploy/consolidated';
       const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>(path, body);
       openDeployStream(streamTicket, {
         onLine: (l) => setLines((p) => [...p, l]),
@@ -180,13 +147,24 @@ export function Deploy() {
     </div>
   );
 
+  // ---------- PORTAL-UI (delegated to the shared channel component) ----------
+  if (mode === 'portal-ui') return (
+    <main style={{ padding: '0 24px 0', maxWidth: 1500 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 0', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }} />
+        {modeSwitch}
+      </div>
+      <PortalUi modes={['deploy']} heading="Deploy portal UI" subtitle="STEP 1 OF 3 — MAPS TO portalui/run.sh" />
+    </main>
+  );
+
   // ---------- BUILD ----------
   if (step === 'build') return (
     <main style={{ padding: '0 24px 48px', maxWidth: 1500 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 14px', flexWrap: 'wrap' }}>
         <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Deploy to production</h3>
         <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>
-          STEP 1 OF 3 — {mode === 'group' ? 'BUILD · MAPS TO ./run.sh' : mode === 'consolidated' ? 'BUILD · MAPS TO ./deploy.sh' : 'BUILD · MAPS TO portalui/run.sh'}
+          STEP 1 OF 3 — {mode === 'group' ? 'BUILD · MAPS TO ./run.sh' : 'BUILD · MAPS TO ./deploy.sh'}
         </div>
         <div style={{ flex: 1 }} />
         {modeSwitch}
@@ -194,10 +172,8 @@ export function Deploy() {
 
       {mode === 'group' ? (
         <GroupBuild {...{ group, groups, hosts, setHosts, apps, setApps, actions, setActions, setGroupKey, hostExpr, fullCmd, scoped, me, canReview, sharedNoStop, toggle, goConfirm }} />
-      ) : mode === 'consolidated' ? (
-        <ConsolidatedBuild {...{ scopedGroups, cGroup, pickCGroup, cHosts, setCHosts, cApps, setCApps, effectivePairs, removePair, clearPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }} />
       ) : (
-        <PortalUiBuild {...{ puCatalog, puMode, setPuMode, puUis, setPuUis, puHosts, setPuHosts, puFixUrl, setPuFixUrl, puFixSize, setPuFixSize, puDate, setPuDate, puAllHosts, puRailHosts, portalUiCmd, canReview, me, toggle, goConfirm }} />
+        <ConsolidatedBuild {...{ scopedGroups, cGroup, pickCGroup, cHosts, setCHosts, cApps, setCApps, effectivePairs, removePair, clearPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }} />
       )}
     </main>
   );
@@ -210,27 +186,8 @@ export function Deploy() {
         <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>STEP 2 OF 3 — NOTHING HAS RUN YET</div>
       </div>
       <div style={{ borderTop: rule2, paddingTop: 20, display: 'grid', gap: 20 }}>
-        <div style={{ background: 'color-mix(in srgb, black 40%, var(--color-text))', padding: 14, fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)', wordBreak: 'break-all' }}>$ {mode === 'group' ? fullCmd : mode === 'consolidated' ? consolidatedCmd : portalUiCmd}</div>
+        <div style={{ background: 'color-mix(in srgb, black 40%, var(--color-text))', padding: 14, fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)', wordBreak: 'break-all' }}>$ {mode === 'group' ? fullCmd : consolidatedCmd}</div>
 
-        {mode === 'portal-ui' && (
-          <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>PORTAL-UI {puMode.toUpperCase()}</h6>
-            <div style={{ borderTop: rule2 }}>
-              {[['Mode', puMode],
-                ['UIs', puUis.join(', ')],
-                [puMode === 'fetch' || puMode === 'verify' ? 'Source' : 'Hosts', railHosts.join(', ')],
-                ...(puMode === 'deploy' ? [['Fixes', `${puFixUrl ? 'url-fix' : 'no url-fix'} · ${puFixSize ? 'MAX_FILE_SIZE=10MB' : 'no size-fix'}`] as [string, string]] : []),
-                ...(puDate ? [[puMode === 'rollback' ? 'Restore backup' : 'Backup date', puDate] as [string, string]] : []),
-              ].map(([k, v], i) => (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 12, padding: '8px 2px', borderBottom: rule1, fontFamily: mono, fontSize: 12.5 }}>
-                  <div style={{ color: 'var(--color-neutral-500)' }}>{k}</div><div style={{ color: 'var(--color-neutral-100)' }}>{v || '—'}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {mode !== 'portal-ui' && (
         <div>
           <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 4px' }}>ACTION PER SERVICE</h6>
           <div style={{ fontSize: 12, color: 'var(--color-neutral-500)', marginBottom: 8 }}>
@@ -258,15 +215,10 @@ export function Deploy() {
             </div>
           ))}
         </div>
-        )}
 
         <div>
-          {[mode === 'portal-ui'
-              ? `Runs ${puMode} on ${railHosts.length} ${puMode === 'fetch' || puMode === 'verify' ? 'staging' : 'DMZ'} host(s): ${railHosts.join(', ')}.`
-              : `Runs on ${railHosts.length} production host(s): ${railHosts.join(', ')}.`,
-            ...(mode === 'portal-ui'
-              ? (puMode === 'deploy' ? ['Each host is backed up before extract; url-fix rewrites test→prod hosts in main-*.js.'] : puMode === 'rollback' ? ['Current UI is snapshotted before the backup is restored.'] : [])
-              : [actions.includes('stop') ? 'Stopped services go down during the window.' : 'No downtime — no stop phase.']),
+          {[`Runs on ${railHosts.length} production host(s): ${railHosts.join(', ')}.`,
+            actions.includes('stop') ? 'Stopped services go down during the window.' : 'No downtime — no stop phase.',
             ...(mode === 'consolidated' ? ['A service not installed on its host is skipped automatically — the run continues for the rest.'] : []),
             `Report emailed to devops-team@nagad.com.bd and written to the audit log.`].map((r, i) => (
             <div key={i} style={{ display: 'flex', gap: 12, padding: '8px 2px', borderBottom: rule1, fontSize: 13, color: 'var(--color-neutral-300)' }}>
@@ -307,7 +259,7 @@ export function Deploy() {
               {railHosts.map((h) => (
                 <div key={h} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: rule1 }}>
                   <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-100)', width: 90 }}>{h}</div>
-                  {runPhases.map((a) => { const st = rail[h]?.[a] ?? 'pending';
+                  {actions.map((a) => { const st = rail[h]?.[a] ?? 'pending';
                     const bg = st === 'done' ? C.run : st === 'active' ? C.warn : 'transparent';
                     const bd = st === 'pending' ? '1px solid var(--color-neutral-600)' : '1px solid transparent';
                     return <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -536,109 +488,6 @@ function dedupPairs(arr: DeployPair[]): DeployPair[] {
     if (!seen.has(k)) { seen.add(k); out.push(p); }
   }
   return out;
-}
-
-// ============================ PORTAL-UI BUILD ============================
-const PU_MODE_LABEL: Record<string, string> = {
-  fetch: 'FETCH — from staging', deploy: 'DEPLOY — to prod DMZ', rollback: 'ROLLBACK — restore backup', verify: 'VERIFY — vs staging',
-};
-function PortalUiBuild({ puCatalog, puMode, setPuMode, puUis, setPuUis, puHosts, setPuHosts, puFixUrl, setPuFixUrl, puFixSize, setPuFixSize, puDate, setPuDate, puAllHosts, puRailHosts, portalUiCmd, canReview, me, toggle, goConfirm }: any) {
-  if (!puCatalog) return <div style={{ padding: 20, color: 'var(--color-neutral-500)' }}>loading…</div>;
-  const scopeHosts = puMode === 'deploy' || puMode === 'rollback';
-  const showFixes = puMode === 'deploy';
-  const showDate = puMode === 'deploy' || puMode === 'rollback';
-  const allHostsOn = puHosts.length === puAllHosts.length && puAllHosts.length > 0;
-  return (
-    <>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 12px', marginBottom: 4, background: 'var(--color-neutral-900)', fontSize: 12, color: 'var(--color-neutral-300)' }}>
-        <span style={{ width: 9, height: 9, background: C.run, flex: 'none' }} />Separate channel for the DMZ portal UIs (<span style={{ fontFamily: mono, color: 'var(--color-neutral-100)' }}>{puCatalog.uis.join(' · ')}</span>). Fetch from staging, deploy to prod with url-fix, or roll back a backup. Maps to <span style={{ fontFamily: mono, color: 'var(--color-neutral-100)' }}>portalui/run.sh</span>.
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: 36, borderTop: rule2, paddingTop: 22, alignItems: 'start' }}>
-        <div style={{ display: 'grid', gap: 24 }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
-              <h6 style={{ color: 'var(--color-neutral-400)', margin: 0 }}>1 — UIs <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— multi-select</span></h6>
-              <button onClick={() => setPuUis(puUis.length === puCatalog.uis.length ? [] : [...puCatalog.uis])} style={linkBtn}>{puUis.length === puCatalog.uis.length ? 'CLEAR' : 'SELECT ALL'}</button>
-            </div>
-            <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-              {puCatalog.uis.map((u: string) => { const on = puUis.includes(u); return (
-                <button key={u} onClick={() => setPuUis((p: string[]) => toggle(p, u))} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
-                  background: on ? 'var(--color-neutral-100)' : 'transparent', color: on ? 'var(--color-text)' : 'var(--color-neutral-300)', cursor: 'pointer', padding: '7px 14px', fontFamily: mono, fontSize: 12 }}>{u}</button>
-              ); })}
-            </div>
-          </div>
-
-          <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>2 — MODE</h6>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 2 }}>
-              {puCatalog.modes.map((m: string) => { const on = m === puMode; return (
-                <button key={m} onClick={() => { setPuMode(m); setPuHosts([]); }} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
-                  background: on ? 'var(--color-neutral-100)' : 'transparent', color: on ? 'var(--color-text)' : 'var(--color-neutral-300)', cursor: 'pointer', padding: '9px 12px', textAlign: 'left', fontFamily: mono, fontSize: 11.5 }}>{PU_MODE_LABEL[m] ?? m}</button>
-              ); })}
-            </div>
-          </div>
-
-          {scopeHosts && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
-                <h6 style={{ color: 'var(--color-neutral-400)', margin: 0 }}>3 — HOSTS <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— empty = all DMZ hosts</span></h6>
-                <button onClick={() => setPuHosts(allHostsOn ? [] : [...puAllHosts])} style={linkBtn}>{allHostsOn ? 'CLEAR' : 'SELECT ALL'}</button>
-              </div>
-              <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                {puCatalog.prodHosts.map((h: any) => { const on = puHosts.includes(h.host); return (
-                  <button key={h.host} onClick={() => setPuHosts((p: string[]) => toggle(p, h.host))} title={h.ip} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)',
-                    background: on ? 'var(--color-neutral-100)' : 'transparent', color: on ? 'var(--color-text)' : 'var(--color-neutral-300)', cursor: 'pointer', padding: '7px 12px', fontFamily: mono, fontSize: 11.5 }}>{h.host}</button>
-                ); })}
-              </div>
-            </div>
-          )}
-          {!scopeHosts && (
-            <div style={{ fontSize: 12, color: 'var(--color-neutral-500)' }}>
-              {puMode === 'fetch' ? 'Fetch always reads from staging' : 'Verify compares the fetched tar against live staging'} — <span style={{ fontFamily: mono, color: 'var(--color-neutral-300)' }}>{puCatalog.staging.host}</span> ({puCatalog.staging.ip}).
-            </div>
-          )}
-
-          {showFixes && (
-            <div>
-              <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>4 — FIXES</h6>
-              <div style={{ display: 'flex', gap: 2 }}>
-                {([['url-fix', puFixUrl, setPuFixUrl, 'rewrite test→prod hosts in main-*.js'], ['size-fix', puFixSize, setPuFixSize, 'set MAX_FILE_SIZE to 10 MB']] as const).map(([label, on, set, desc]) => (
-                  <button key={label} onClick={() => set(!on)} title={desc} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid color-mix(in srgb, var(--color-neutral-100) 20%, transparent)', background: 'transparent', cursor: 'pointer', padding: '12px 18px', minWidth: 170, justifyContent: 'flex-start' }}>
-                    <div style={{ width: 14, height: 14, border: '1px solid var(--color-neutral-400)', background: on ? 'var(--color-neutral-100)' : 'transparent' }} />
-                    <div style={{ fontFamily: mono, fontSize: 13, color: on ? 'var(--color-neutral-100)' : 'var(--color-neutral-500)' }}>{label}</div>
-                  </button>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-neutral-500)', marginTop: 6 }}>Deselect both = raw deploy (<span style={{ fontFamily: mono }}>--no-fix</span>).</div>
-            </div>
-          )}
-
-          {showDate && (
-            <div>
-              <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>{showFixes ? '5' : '4'} — {puMode === 'rollback' ? 'RESTORE BACKUP' : 'BACKUP DATE'} <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— DDMMYYYY, optional ({puMode === 'rollback' ? 'newest' : 'today'} if blank)</span></h6>
-              <input value={puDate} onChange={(e) => setPuDate(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))} placeholder={puMode === 'rollback' ? 'newest backup' : 'today'}
-                style={{ width: 200, background: 'var(--color-neutral-900)', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 25%, transparent)', color: 'var(--color-neutral-100)', padding: '9px 10px', fontFamily: mono, fontSize: 13 }} />
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: 'grid', gap: 18, position: 'sticky', top: 20 }}>
-          <CommandBox cmd={portalUiCmd} />
-          <div>
-            <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 6px' }}>SUMMARY</h6>
-            <div style={{ borderTop: rule2 }}>
-              {[`mode: ${puMode}`, `UIs: ${puUis.join(', ') || '—'}`, `${scopeHosts ? 'hosts' : 'source'}: ${puRailHosts.join(', ') || '—'}`,
-                ...(showFixes ? [`fixes: ${puFixUrl ? 'url-fix' : '—'}${puFixSize ? ' · size-fix' : ''}`] : [])].map((b, i) => (
-                <div key={i} style={{ padding: '8px 2px', borderBottom: rule1, fontSize: 12.5, color: 'var(--color-neutral-300)' }}>{b}</div>
-              ))}
-            </div>
-          </div>
-          <button onClick={goConfirm} disabled={!canReview} style={reviewBtn(canReview)}>REVIEW →</button>
-          <div style={{ fontSize: 11, color: 'var(--color-neutral-500)' }}>{!me?.x ? 'Your role can build but not execute (no x permission).' : 'Nothing runs until you confirm on the next step.'}</div>
-        </div>
-      </div>
-    </>
-  );
 }
 
 function ActionPicker({ actions, setActions, toggle }: any) {
