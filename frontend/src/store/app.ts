@@ -11,6 +11,7 @@ export interface Me {
   w: boolean;
   x: boolean;
   perms: string;
+  mustChangePassword: boolean;
 }
 
 export type Screen =

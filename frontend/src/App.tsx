@@ -3,6 +3,7 @@ import { useApp } from './store/app';
 import { api, getToken, ApiError } from './api/client';
 import type { Me } from './store/app';
 import { Login } from './screens/Login';
+import { ChangePassword } from './screens/ChangePassword';
 import { Header } from './components/Header';
 import { Toast } from './components/Toast';
 import { Fleet } from './screens/Fleet';
@@ -44,6 +45,10 @@ export function App() {
   }
 
   if (!me) return <Login />;
+
+  // First-login gate: until the provisioned password is replaced, the console is off-limits
+  // (the backend enforces this too — every other endpoint returns 403 while it's pending).
+  if (me.mustChangePassword) return <ChangePassword />;
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-text)', color: 'var(--color-neutral-200)', fontSize: 13 }}>
