@@ -18,6 +18,12 @@ spring:
   flyway:
     enabled: true
     baseline-on-migrate: true
+    # Allow a lower-versioned migration to apply after higher ones already ran. The versioned
+    # migrations are split across folders (db/migration holds the low numbers, db/migration-pg
+    # holds V10), so a newly added migration like V4 can land in an existing database whose
+    # history already includes V10. Without this, Flyway aborts on startup with
+    # "Detected resolved migration not applied to database" and the backend crash-loops.
+    out-of-order: true
     locations: classpath:db/migration,classpath:db/migration-pg
 
 server:
