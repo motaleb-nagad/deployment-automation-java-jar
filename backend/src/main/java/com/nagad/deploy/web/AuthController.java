@@ -19,16 +19,10 @@ public class AuthController {
         this.current = current;
     }
 
-    /** Step 1 — password. On success an OTP is emailed and factor 2 begins. */
+    /** Single-factor sign-in: username + password issues a bearer session token. */
     @PostMapping("/login")
-    public LoginResponse login(@RequestBody LoginRequest req) {
+    public SessionResponse login(@RequestBody LoginRequest req) {
         return auth.login(req);
-    }
-
-    /** Step 2 — 6-digit OTP. On success a bearer session token is issued. */
-    @PostMapping("/verify")
-    public SessionResponse verify(@RequestBody VerifyRequest req) {
-        return auth.verify(req);
     }
 
     @PostMapping("/logout")

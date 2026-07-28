@@ -3,17 +3,23 @@ package com.nagad.deploy.service;
 import com.nagad.deploy.domain.AppUser;
 import com.nagad.deploy.domain.JarRegistry;
 import com.nagad.deploy.domain.Promotion;
+import com.nagad.deploy.domain.Role;
 import com.nagad.deploy.dto.Dtos.*;
 import com.nagad.deploy.repo.AppUserRepository;
 import com.nagad.deploy.repo.AuditLogRepository;
 import com.nagad.deploy.repo.JarRegistryRepository;
 import com.nagad.deploy.repo.PromotionRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
+import static org.springframework.http.HttpStatus.CONFLICT;
 
 /** Read models for the Registry, Admin and Audit screens. */
 @Service
@@ -23,16 +29,52 @@ public class RegistryService {
     private final PromotionRepository promos;
     private final AppUserRepository users;
     private final AuditLogRepository audit;
+    private final PasswordEncoder encoder;
+    private final AuditService auditService;
 
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm").withZone(ZoneOffset.UTC);
 
     public RegistryService(JarRegistryRepository registry, PromotionRepository promos,
-                           AppUserRepository users, AuditLogRepository audit) {
+                           AppUserRepository users, AuditLogRepository audit,
+                           PasswordEncoder encoder, AuditService auditService) {
         this.registry = registry;
         this.promos = promos;
         this.users = users;
         this.audit = audit;
+        this.encoder = encoder;
+        this.auditService = auditService;
+    }
+
+    /** Super-admin provisions a new account with an initial (hashed) password. */
+    @Transactional
+    public void createUser(String actor, CreateUserRequest req) {
+        String username = req.username() == null ? "" : req.username().trim();
+        if (username.isEmpty() || req.password() == null || req.password().length() < 6) {
+            throw new ResponseStatusException(BAD_REQUEST, "username required and password must be at least 6 characters");
+        }
+        if (users.existsById(username)) {
+            throw new ResponseStatusException(CONFLICT, "user " + username + " already exists");
+        }
+        String scope = (req.scope() == null || req.scope().isBlank()) ? "all" : req.scope().trim();
+        AppUser u = new AppUser(username, req.name() == null ? username : req.name(),
+                req.email() == null ? username : req.email(), Role.of(req.role() == null ? "viewer" : req.role()),
+                scope, req.r(), req.w(), req.x(), encoder.encode(req.password()));
+        users.save(u);
+        auditService.record(actor, "user-create", username,
+                "created " + Role.of(req.role() == null ? "viewer" : req.role()).wire() + " " + u.perms() + " scope=" + scope);
+    }
+
+    /** Remove an account. The last remaining super-admin cannot be deleted. */
+    @Transactional
+    public void deleteUser(String actor, String username) {
+        AppUser u = users.findById(username)
+                .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "no such user " + username));
+        if (u.getRole() == Role.SUPERADMIN && users.findByRole(Role.SUPERADMIN).size() <= 1) {
+            throw new ResponseStatusException(CONFLICT, "cannot delete the last super admin");
+        }
+        users.deleteById(username);
+        auditService.record(actor, "user-delete", username, "removed account");
     }
 
     @Transactional(readOnly = true)

@@ -5,10 +5,9 @@ import { roleMeta } from '../theme/colors';
 import type { PromotionView } from '../api/types';
 
 const TABS: { label: string; screen: Screen; needsSA?: boolean }[] = [
-  { label: 'FLEET', screen: 'fleet' },
-  { label: 'PROMOTE', screen: 'promote' },
+  { label: 'SERVICES STATUS', screen: 'fleet' },
+  { label: 'FETCH JAR FROM STG', screen: 'promote' },
   { label: 'DEPLOY', screen: 'deploy' },
-  { label: 'APPROVALS', screen: 'approvals', needsSA: true },
   { label: 'REGISTRY', screen: 'registry' },
   { label: 'HISTORY', screen: 'history' },
   { label: 'ADMIN', screen: 'admin', needsSA: true },
