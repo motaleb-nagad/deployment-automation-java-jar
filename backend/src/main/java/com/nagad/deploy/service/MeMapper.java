@@ -8,6 +8,7 @@ public final class MeMapper {
 
     public static MeResponse of(AppUser u) {
         return new MeResponse(u.getUsername(), u.getName(), u.getEmail(), u.getRole().wire(),
-                u.getScope(), u.isPermR(), u.isPermW(), u.isPermX(), u.perms());
+                u.getScope(), u.isPermR(), u.isPermW(), u.isPermX(), u.perms(),
+                u.isMustChangePassword());
     }
 }

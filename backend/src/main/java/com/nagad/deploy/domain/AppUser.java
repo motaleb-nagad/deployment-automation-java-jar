@@ -31,6 +31,10 @@ public class AppUser {
     @Column(name = "password_hash")
     private String passwordHash;
 
+    /** True until the user replaces the admin-provisioned password on first sign-in. */
+    @Column(name = "must_change_password")
+    private boolean mustChangePassword;
+
     @Column(name = "created_at")
     private Instant createdAt = Instant.now();
 
@@ -38,7 +42,8 @@ public class AppUser {
 
     /** Create a new account (password already hashed). */
     public AppUser(String username, String name, String email, Role role, String scope,
-                   boolean permR, boolean permW, boolean permX, String passwordHash) {
+                   boolean permR, boolean permW, boolean permX, String passwordHash,
+                   boolean mustChangePassword) {
         this.username = username;
         this.name = name;
         this.email = email;
@@ -48,7 +53,14 @@ public class AppUser {
         this.permW = permW;
         this.permX = permX;
         this.passwordHash = passwordHash;
+        this.mustChangePassword = mustChangePassword;
         this.createdAt = Instant.now();
+    }
+
+    /** Set a new (already hashed) password and clear the first-login change requirement. */
+    public void changePassword(String newPasswordHash) {
+        this.passwordHash = newPasswordHash;
+        this.mustChangePassword = false;
     }
 
     public boolean scopeAll() {
@@ -73,6 +85,7 @@ public class AppUser {
     public boolean isPermW() { return permW; }
     public boolean isPermX() { return permX; }
     public String getPasswordHash() { return passwordHash; }
+    public boolean isMustChangePassword() { return mustChangePassword; }
     public Instant getCreatedAt() { return createdAt; }
 
     public String perms() {

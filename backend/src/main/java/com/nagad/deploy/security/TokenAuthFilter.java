@@ -37,13 +37,32 @@ public class TokenAuthFilter extends OncePerRequestFilter {
         if (token != null) {
             String username = sessions.resolve(token);
             if (username != null) {
-                users.findById(username).ifPresent(u -> {
+                AppUser u = users.findById(username).orElse(null);
+                if (u != null) {
                     var auth = new UsernamePasswordAuthenticationToken(u.getUsername(), null, authorities(u));
                     SecurityContextHolder.getContext().setAuthentication(auth);
-                });
+                    // First-login gate: an account that still owes a password change may only
+                    // reach the change-password endpoint (plus /me and logout). Everything else
+                    // is refused server-side, so the gate can't be bypassed from the client.
+                    if (u.isMustChangePassword() && !passwordChangeExempt(req)) {
+                        res.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                        res.setContentType("application/json");
+                        res.getWriter().write("{\"message\":\"password change required\"}");
+                        return;
+                    }
+                }
             }
         }
         chain.doFilter(req, res);
+    }
+
+    /** Endpoints an account may still reach while it owes a first-login password change. */
+    private static boolean passwordChangeExempt(HttpServletRequest req) {
+        String uri = req.getRequestURI();
+        String method = req.getMethod();
+        return ("POST".equals(method) && "/api/auth/change-password".equals(uri))
+                || ("POST".equals(method) && "/api/auth/logout".equals(uri))
+                || ("GET".equals(method) && "/api/auth/me".equals(uri));
     }
 
     private static List<SimpleGrantedAuthority> authorities(AppUser u) {

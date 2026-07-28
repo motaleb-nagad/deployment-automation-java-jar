@@ -35,4 +35,14 @@ public class AuthController {
     public MeResponse me() {
         return MeMapper.of(current.require());
     }
+
+    /**
+     * Change one's own password. Required on first sign-in (the account is gated until it
+     * succeeds) and available for self-service afterwards. Returns the refreshed profile,
+     * with {@code mustChangePassword} cleared once the change goes through.
+     */
+    @PostMapping("/change-password")
+    public MeResponse changePassword(@RequestBody ChangePasswordRequest req) {
+        return auth.changePassword(current.require(), req);
+    }
 }

@@ -67,7 +67,8 @@ export function Admin() {
 
       {/* Create user */}
       <div style={{ background: 'var(--color-neutral-900)', padding: 16, marginBottom: 22 }}>
-        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 11, letterSpacing: '.1em', color: 'var(--color-neutral-100)', marginBottom: 14 }}>CREATE USER</div>
+        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 11, letterSpacing: '.1em', color: 'var(--color-neutral-100)', marginBottom: 4 }}>CREATE USER</div>
+        <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', marginBottom: 14 }}>Share this temporary password with the user — they must set their own on first sign-in, after which it is known only to them.</div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 220 }}>
             <label style={cap}>ACCOUNT (EMAIL)</label>

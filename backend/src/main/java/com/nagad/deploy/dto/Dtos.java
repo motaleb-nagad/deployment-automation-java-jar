@@ -17,7 +17,11 @@ public final class Dtos {
     public record SessionResponse(String token, MeResponse user) {}
 
     public record MeResponse(String username, String name, String email, String role,
-                             String scope, boolean r, boolean w, boolean x, String perms) {}
+                             String scope, boolean r, boolean w, boolean x, String perms,
+                             boolean mustChangePassword) {}
+
+    /** First-login (or self-service) password change: current password + the new one. */
+    public record ChangePasswordRequest(String currentPassword, String newPassword) {}
 
     // ---- promotion / approval ----
     public record FetchRequest(String srcGroup, List<String> apps) {}

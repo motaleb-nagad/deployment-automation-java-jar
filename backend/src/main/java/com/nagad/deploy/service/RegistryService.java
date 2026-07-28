@@ -57,9 +57,11 @@ public class RegistryService {
             throw new ResponseStatusException(CONFLICT, "user " + username + " already exists");
         }
         String scope = (req.scope() == null || req.scope().isBlank()) ? "all" : req.scope().trim();
+        // The admin-set password is single-use: the account must change it on first sign-in,
+        // so the super admin never knows the password the user ends up with.
         AppUser u = new AppUser(username, req.name() == null ? username : req.name(),
                 req.email() == null ? username : req.email(), Role.of(req.role() == null ? "viewer" : req.role()),
-                scope, req.r(), req.w(), req.x(), encoder.encode(req.password()));
+                scope, req.r(), req.w(), req.x(), encoder.encode(req.password()), true);
         users.save(u);
         auditService.record(actor, "user-create", username,
                 "created " + Role.of(req.role() == null ? "viewer" : req.role()).wire() + " " + u.perms() + " scope=" + scope);

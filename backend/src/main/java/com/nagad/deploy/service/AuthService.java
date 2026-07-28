@@ -7,6 +7,7 @@ import com.nagad.deploy.security.SessionStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.security.SecureRandom;
@@ -14,6 +15,7 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
 /**
@@ -64,6 +66,31 @@ public class AuthService {
 
     public void logout(String bearer) {
         sessions.revoke(bearer);
+    }
+
+    /**
+     * Change one's own password. Used to satisfy the forced first-login change, and available
+     * for self-service afterwards. The new password is verified against the current one, hashed
+     * with bcrypt, and stored — so nobody but the account holder ever knows it. Clearing the
+     * {@code must_change_password} flag is what lifts the first-login gate.
+     */
+    @Transactional
+    public MeResponse changePassword(AppUser user, ChangePasswordRequest req) {
+        String current = req.currentPassword();
+        String next = req.newPassword() == null ? "" : req.newPassword();
+        if (current == null || !encoder.matches(current, user.getPasswordHash())) {
+            throw new ResponseStatusException(UNAUTHORIZED, "current password is incorrect");
+        }
+        if (next.length() < 8) {
+            throw new ResponseStatusException(BAD_REQUEST, "new password must be at least 8 characters");
+        }
+        if (encoder.matches(next, user.getPasswordHash())) {
+            throw new ResponseStatusException(BAD_REQUEST, "new password must differ from the current password");
+        }
+        user.changePassword(encoder.encode(next));
+        users.save(user);
+        audit.recordSelf(user.getUsername(), "password-change", user.getUsername(), "changed own password");
+        return MeMapper.of(user);
     }
 
     private boolean passwordOk(AppUser u, String password) {
