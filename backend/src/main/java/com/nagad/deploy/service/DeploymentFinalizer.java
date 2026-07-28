@@ -91,12 +91,22 @@ public class DeploymentFinalizer {
     @Transactional
     public List<Map<String, String>> commitConsolidated(String deploymentId, String actor,
                                                         List<com.nagad.deploy.dto.Dtos.DeployPair> pairs,
-                                                        List<String> actions, String cmd, String lastLogLine) {
+                                                        List<String> actions, String cmd, String lastLogLine,
+                                                        java.util.Set<String> skipped) {
         List<Map<String, String>> rows = new ArrayList<>();
         boolean isDeploy = actions.contains("deploy");
+        java.util.Set<String> skip = skipped == null ? java.util.Set.of() : skipped;
+        int skippedCount = 0;
 
         for (var p : pairs) {
             String host = p.host(), app = p.app();
+            // Service not installed on this host — skipped by the run, not deployed.
+            if (skip.contains(host + ":" + app)) {
+                String prod = prodHash.current(inv.groupForHost(host).map(FleetInventory.Group::cmd).orElse("consolidated"), app);
+                rows.add(Map.of("host", host, "app", app, "before", prod, "after", prod, "verdict", "skipped"));
+                skippedCount++;
+                continue;
+            }
             FleetInventory.Group g = inv.groupForHost(host).orElse(null);
             String group = g != null ? g.cmd() : "consolidated";
             String before = prodHash.current(group, app);
@@ -119,13 +129,15 @@ public class DeploymentFinalizer {
         }
 
         String finalAfter = rows.isEmpty() ? "-" : rows.get(rows.size() - 1).get("after");
+        String skipNote = skippedCount > 0 ? " (" + skippedCount + " skipped — not installed on host)" : "";
         deployments.findById(deploymentId).ifPresent(d ->
                 d.complete("ok", "—", serialize(rows), lastLogLine));
         String targets = pairs.stream().map(p -> p.host() + ":" + p.app())
                 .collect(java.util.stream.Collectors.joining(" "));
         audit.record(actor, "deploy", "consolidated " + targets,
-                String.join(",", actions) + " → " + finalAfter);
-        mail.send("devops-team@nagad.com.bd", "Consolidated deploy complete — " + deploymentId, "Ran " + cmd);
+                String.join(",", actions) + " → " + finalAfter + skipNote);
+        mail.send("devops-team@nagad.com.bd", "Consolidated deploy complete — " + deploymentId,
+                "Ran " + cmd + skipNote);
         return rows;
     }
 

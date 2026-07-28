@@ -207,6 +207,7 @@ export function Deploy() {
         <div>
           {[`Runs on ${railHosts.length} production host(s): ${railHosts.join(', ')}.`,
             actions.includes('stop') ? 'Stopped services go down during the window.' : 'No downtime — no stop phase.',
+            ...(mode === 'consolidated' ? ['A service not installed on its host is skipped automatically — the run continues for the rest.'] : []),
             `Report emailed to devops-team@nagad.com.bd and written to the audit log.`].map((r, i) => (
             <div key={i} style={{ display: 'flex', gap: 12, padding: '8px 2px', borderBottom: rule1, fontSize: 13, color: 'var(--color-neutral-300)' }}>
               <div style={{ width: 12, height: 12, background: 'var(--color-neutral-700)', marginTop: 3, flex: 'none' }} />{r}</div>
@@ -269,19 +270,29 @@ export function Deploy() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '20px 0 14px' }}>
             <div style={{ width: 14, height: 14, background: C.run }} />
             <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Completed</h3>
-            <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-400)' }}>{result.length} host×app · {result.filter((r) => r.verdict === 'changed').length} changed</div>
+            <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-400)' }}>
+              {result.length} host×app · {result.filter((r) => r.verdict === 'changed').length} changed
+              {result.some((r) => r.verdict === 'skipped') && <> · {result.filter((r) => r.verdict === 'skipped').length} skipped</>}
+            </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '100px 160px 1fr 130px', gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
             <div>HOST</div><div>SERVICE</div><div>BEFORE → AFTER</div><div>VERDICT</div>
           </div>
-          {result.map((rw, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '100px 160px 1fr 130px', gap: 12, padding: 8, borderBottom: rule1, fontFamily: mono, fontSize: 12, alignItems: 'center' }}>
+          {result.map((rw, i) => {
+            const skipped = rw.verdict === 'skipped';
+            const changed = rw.verdict === 'changed';
+            return (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '100px 160px 1fr 130px', gap: 12, padding: 8, borderBottom: rule1, fontFamily: mono, fontSize: 12, alignItems: 'center', opacity: skipped ? 0.75 : 1 }}>
               <div style={{ color: 'var(--color-neutral-100)' }}>{rw.host}</div>
               <div style={{ color: 'var(--color-neutral-300)' }}>{rw.app}</div>
-              <div><span style={{ color: 'var(--color-neutral-500)' }}>{rw.before}</span> <span style={{ color: 'var(--color-neutral-500)' }}>→</span> <span style={{ color: rw.verdict === 'changed' ? '#22c55e' : 'var(--color-neutral-400)', fontWeight: 700 }}>{rw.after}</span></div>
-              <div style={{ justifySelf: 'start', padding: '2px 8px', background: rw.verdict === 'changed' ? C.run : 'transparent', color: rw.verdict === 'changed' ? C.inkOnGreen : 'var(--color-neutral-500)', border: rw.verdict === 'changed' ? 'none' : '1px solid var(--color-neutral-700)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9.5, letterSpacing: '.1em' }}>{rw.verdict.toUpperCase()}</div>
+              <div>
+                {skipped
+                  ? <span style={{ color: C.warn }}>— not installed on {rw.host}, skipped</span>
+                  : <><span style={{ color: 'var(--color-neutral-500)' }}>{rw.before}</span> <span style={{ color: 'var(--color-neutral-500)' }}>→</span> <span style={{ color: changed ? '#22c55e' : 'var(--color-neutral-400)', fontWeight: 700 }}>{rw.after}</span></>}
+              </div>
+              <div style={{ justifySelf: 'start', padding: '2px 8px', background: changed ? C.run : 'transparent', color: changed ? C.inkOnGreen : skipped ? C.warn : 'var(--color-neutral-500)', border: changed ? 'none' : skipped ? `1px solid ${C.warn}` : '1px solid var(--color-neutral-700)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9.5, letterSpacing: '.1em' }}>{rw.verdict.toUpperCase()}</div>
             </div>
-          ))}
+          ); })}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 18 }}>
             <button onClick={reset} style={{ border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', background: 'transparent', color: 'var(--color-neutral-200)', cursor: 'pointer', padding: '11px 16px', fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 11, letterSpacing: '.1em' }}>NEW ACTION</button>
             <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)' }}>Same report emailed to devops-team@nagad.com.bd · logged to the audit trail · registry updated.</div>

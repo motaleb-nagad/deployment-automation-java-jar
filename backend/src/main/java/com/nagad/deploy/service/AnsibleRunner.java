@@ -202,6 +202,11 @@ public class AnsibleRunner {
                     ? "fail" : "done";
             return Line.host(level, text, host, action, state);
         }
+        // Missing-service skips from consolidated.yml — a machine marker plus a human note.
+        // Surface them as informational (never fatal); the console parses the marker.
+        if (text.contains("SKIP_PAIR:") || text.contains("SKIPPED on ") || text.contains("not installed here")) {
+            return Line.log("dim", text);
+        }
         if (text.startsWith("PLAY RECAP") || text.startsWith("PLAY [")) return Line.log("ink", text);
         if (text.startsWith("TASK [")) return Line.log("task", text);
         if (text.startsWith("fatal") || text.startsWith("ERROR") || text.contains("FAILED")) {
@@ -300,8 +305,22 @@ public class AnsibleRunner {
         for (DeployPair p : pairs) if (!hosts.contains(p.host())) hosts.add(p.host());
         for (String h : hosts) out.add(Line.log("ok", "ok: [nagad-" + h + "]"));
 
+        // Availability pre-check (mirrors consolidated.yml): announce services that are not
+        // installed on their host as SKIP markers, then run only the present pairs.
+        out.add(Line.log("task", stars("TASK [Detect installed services per host]")));
+        List<DeployPair> present = new ArrayList<>();
+        for (DeployPair p : pairs) {
+            if (inv.demoPresentOnHost(p.host(), p.app())) {
+                present.add(p);
+            } else {
+                out.add(Line.log("dim", "SKIP_PAIR: " + p.host() + ":" + p.app()));
+                out.add(Line.log("dim", "SKIPPED on nagad-" + p.host()
+                        + " — service not installed here, continuing without it: " + p.app()));
+            }
+        }
+
         for (String a : actions) {
-            for (DeployPair p : pairs) {
+            for (DeployPair p : present) {
                 String app = p.app(), h = p.host();
                 String jar = FleetInventory.JAR_MAP.getOrDefault(app, app + "-1.0.jar");
                 out.add(Line.log("task", stars("TASK [" + a + " : " + app + " @ " + h + "]")));
@@ -318,10 +337,11 @@ public class AnsibleRunner {
         }
         out.add(Line.log("ink", stars("PLAY RECAP")));
         for (String h : hosts) {
-            long appsOnHost = pairs.stream().filter(p -> p.host().equals(h)).count();
+            long appsOnHost = present.stream().filter(p -> p.host().equals(h)).count();
+            long skippedOnHost = pairs.stream().filter(p -> p.host().equals(h)).count() - appsOnHost;
             long changed = actions.size() * appsOnHost;
             out.add(Line.log("ok", pad(h) + ": ok=" + (1 + changed) + "  changed=" + changed
-                    + "  unreachable=0  failed=0"));
+                    + "  unreachable=0  failed=0  skipped=" + (actions.size() * skippedOnHost)));
         }
         out.add(Line.log("dim", "Report emailed to devops-team@nagad.com.bd"));
         return out;

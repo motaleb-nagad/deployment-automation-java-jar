@@ -222,10 +222,18 @@ public class DeploymentService {
 
     private void runStream(RunPlan plan, SseEmitter emitter) {
         try {
-            String lastLog = simulate ? streamScripted(plan, emitter) : streamReal(plan, emitter);
+            // Pairs skipped because the service isn't installed on the host (consolidated.yml
+            // announces them as SKIP_PAIR markers; demo mode derives them from the inventory).
+            Set<String> skipped = new HashSet<>();
+            String lastLog = simulate ? streamScripted(plan, emitter) : streamReal(plan, emitter, skipped);
+            if (plan.consolidated() && simulate) {
+                for (DeployPair p : plan.pairs()) {
+                    if (!inv.demoPresentOnHost(p.host(), p.app())) skipped.add(p.host() + ":" + p.app());
+                }
+            }
             List<Map<String, String>> rows = plan.consolidated()
                     ? finalizer.commitConsolidated(plan.deploymentId(), plan.actor(), plan.pairs(),
-                            plan.actions(), plan.cmd(), lastLog)
+                            plan.actions(), plan.cmd(), lastLog, skipped)
                     : finalizer.commit(plan.deploymentId(), plan.actor(), plan.group().cmd(),
                             plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
@@ -250,14 +258,23 @@ public class DeploymentService {
     }
 
     /** Production: SSH to the jump host, run the real wrapper, stream stdout. Non-zero exit fails the run. */
-    private String streamReal(RunPlan plan, SseEmitter emitter) throws IOException, InterruptedException {
+    private String streamReal(RunPlan plan, SseEmitter emitter, Set<String> skipped)
+            throws IOException, InterruptedException {
         StringBuilder lastLog = new StringBuilder();
         Consumer<Line> sink = ln -> {
             try {
                 sendLine(emitter, ln);
-                if (ln.text() != null && !ln.text().isBlank()) {
+                String t = ln.text();
+                if (t != null && t.contains("SKIP_PAIR:")) {
+                    // "...SKIP_PAIR: app3:portal_davs" -> collect the host:app token.
+                    String token = t.substring(t.indexOf("SKIP_PAIR:") + "SKIP_PAIR:".length()).trim();
+                    int sp = token.indexOf(' ');
+                    if (sp > 0) token = token.substring(0, sp);
+                    if (token.contains(":")) skipped.add(token);
+                }
+                if (t != null && !t.isBlank()) {
                     lastLog.setLength(0);
-                    lastLog.append(ln.text());
+                    lastLog.append(t);
                 }
             } catch (IOException e) {
                 throw new UncheckedIOException(e);

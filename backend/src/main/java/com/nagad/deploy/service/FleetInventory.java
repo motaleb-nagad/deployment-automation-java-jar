@@ -33,6 +33,22 @@ public class FleetInventory {
         return groups.stream().filter(g -> g.cmd() != null).toList();
     }
 
+    /**
+     * Demo stand-in for "is this service actually installed on this host?" — the truth a real
+     * run learns from {@code consolidated.yml}'s availability pre-check. A few services are
+     * host-restricted (e.g. the portal_* apps only run on the txn-history tier), so selecting
+     * them on another host demonstrates the skip-and-continue behaviour without touching hosts.
+     * Every other app is treated as present on any host it can be targeted on.
+     */
+    private static final Map<String, java.util.Set<String>> HOST_RESTRICTED = Map.of(
+            "portal_davs", java.util.Set.of("app11", "app12", "app13"),
+            "portal_dfs",  java.util.Set.of("app11", "app12", "app13"));
+
+    public boolean demoPresentOnHost(String host, String app) {
+        java.util.Set<String> allowed = HOST_RESTRICTED.get(app);
+        return allowed == null || allowed.contains(host);
+    }
+
     /** The managed group a production host belongs to — used to route consolidated host:app pairs. */
     public Optional<Group> groupForHost(String host) {
         return managedGroups().stream()
