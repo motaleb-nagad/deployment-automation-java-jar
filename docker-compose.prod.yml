@@ -36,6 +36,11 @@ services:
       DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-registrydb}
       DB_USER: ${POSTGRES_USER:-registry}
       DB_PASSWORD: ${POSTGRES_PASSWORD:-registry}
+      # Migrations are split across folders (db/migration = low numbers, db/migration-pg = V10),
+      # so a newly added lower-numbered migration must be allowed to apply after V10 on an
+      # existing database. Without this, Flyway aborts startup and the backend crash-loops.
+      # Baked into application.yml too; kept here so pre-built images pick it up on restart.
+      SPRING_FLYWAY_OUT_OF_ORDER: "true"
       CORS_ORIGINS: ${CORS_ORIGINS:-http://10.220.2.46:8088}
       MAIL_SIMULATE: ${MAIL_SIMULATE:-true}
       # Real deploys by default now: SSH to the jump host and run ./run.sh.
