@@ -54,6 +54,26 @@ export const api = {
   streamUrl: (p: string) => `/api${p}`,
 };
 
+/** Multipart upload (staging jars / configs / UI tarballs). The bearer token travels only in
+ *  the Authorization header; the browser sets the multipart Content-Type + boundary itself. */
+export async function uploadFile<T>(path: string, file: File, fields: Record<string, string>): Promise<T> {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(fields)) fd.append(k, v);
+  fd.append('file', file);
+  const res = await fetch(`/api${path}`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: fd,
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); msg = j.message ?? msg; } catch { /* ignore */ }
+    throw new ApiError(res.status, msg);
+  }
+  const text = await res.text();
+  return text ? (JSON.parse(text) as T) : (undefined as T);
+}
+
 /** Opens an SSE stream for a deploy run. Authorised by a single-use `streamTicket`
  *  (from POST /deploy) — never the bearer token, which must not appear in a URL. */
 export function openDeployStream(
@@ -64,8 +84,9 @@ export function openDeployStream(
     onComplete?: (c: { deploymentId: string; result: string; rows: ResultRow[] }) => void;
     onError?: (msg: string) => void;
   },
+  streamPath = '/deploy/stream',
 ): () => void {
-  const url = api.streamUrl('/deploy/stream') + `?ticket=${encodeURIComponent(streamTicket)}`;
+  const url = api.streamUrl(streamPath) + `?ticket=${encodeURIComponent(streamTicket)}`;
   const es = new EventSource(url);
   es.addEventListener('line', (e) => handlers.onLine?.(JSON.parse((e as MessageEvent).data)));
   es.addEventListener('host', (e) => handlers.onHost?.(JSON.parse((e as MessageEvent).data)));

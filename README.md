@@ -23,6 +23,7 @@ Implemented from the [Claude Design](https://claude.ai/design) handoff in this r
 | **Fleet** | Read-only dashboard: what's down, hash drift across a group, unexpected restarts. Collector-backed (not live); two demo scenarios — `incident` and `healthy`. |
 | **Promote** | Fetch a built jar from staging → reads its hash, records it to `registry-db`, emails the super admin, opens an approval request. Never touches production. |
 | **Deploy** | Build a `./run.sh`-equivalent (group → hosts → apps → actions), confirm the blast radius, then stream the run live per-host. A `deploy` action is **locked** unless the jar is approved. |
+| **Stg Deployment** | The **staging** channel (`/stg-deployment`), backed by a wholly separate service. Upload-driven: upload a jar / `application.properties` / UI tarball, the portal stages it into the `stg-deployment` bundle on the jump host, then runs `./run.sh` (core/portal) or `portalui/run.sh` live. |
 | **Approvals** | Super-admin gate — approve or deny pending promotions. Nothing reaches production without a decision here. |
 | **Registry** | Persistent record of every governed jar: current prod hash + latest promotion. |
 | **History** | Full audit trail of every run with before/after hashes and a log excerpt. |
@@ -172,6 +173,27 @@ Flip these env vars (see `k8s/20-backend.yaml` / `docker-compose.yml`) and wire 
 | `nagad.auth.demo` | `true` (any 4+ char password) | `false` — bcrypt against `app_user.password_hash`, or swap for SSO/OIDC |
 
 `ANSIBLE_DIR` points at the wrapper's working directory on the jump host.
+
+---
+
+## Staging deployment (`/stg-deployment`)
+
+A **separate** channel for the `stg-deployment` Ansible bundle — its own backend service
+(`StgDeploymentService` / `StgAnsibleRunner`, endpoints under `/api/stg`, its own SSE stream),
+so the governed production path is untouched. Unlike prod (which *fetches* governed jars),
+staging is **upload-driven**: the operator uploads the build from the portal, the portal stages
+it on the jump host, then runs the wrapper.
+
+| Channel | Upload → jump-host path (under `STG_DIR`) | Wrapper |
+|---|---|---|
+| App (jar) | `roles/deployment/files/jars/<jar_map name>` | `./run.sh <core\|portal> all <apps> <actions>` |
+| App (config) | `roles/deployment/files/cfg/<app>-application.properties` | (staged for the deployment role) |
+| Portal UI | `portalui/roles/portalui/files/<ui>.tar` | `portalui/run.sh <uis> [date]` |
+
+Staging hosts: `core` → ngd-dc-core-01 (10.230.1.208), `portal` → ngd-dc-portal-01 (10.230.1.207).
+Uploading needs the **write (w)** permission; executing a run needs **execute (x)**.
+`STG_DIR` (default `/home/konasl/motaleb-ansible/stg-deployment`) is where files are staged and
+the wrappers run. Upload size is bounded by `STG_MAX_FILE_SIZE` (default 512 MB).
 
 ---
 ##test

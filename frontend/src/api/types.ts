@@ -52,6 +52,14 @@ export interface ConsolidatedPairView {
   prodHash: string; targetHash: string | null; approved: boolean;
 }
 
+// ---- staging deployment (stg-deployment bundle, upload-driven) ----
+export interface StgAppView { key: string; jar: string; }
+export interface StgGroupView { key: string; label: string; host: string; ip: string; apps: StgAppView[]; }
+export interface StgCatalog { groups: StgGroupView[]; uis: string[]; workingDir: string; }
+export interface StgUploadResponse { kind: string; target: string; storedName: string; targetPath: string; size: number; }
+export interface StgDeployRequest { group: string; apps: string[]; actions: string[]; }
+export interface StgPortalUiRequest { uis: string[]; date: string; }
+
 export interface DeploymentView {
   id: string; promotionId: string | null; group: string; hosts: string; apps: string;
   actions: string; startedBy: string; startedAt: string; duration: string | null;
