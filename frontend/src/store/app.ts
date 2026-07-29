@@ -15,7 +15,7 @@ export interface Me {
 }
 
 export type Screen =
-  | 'fleet' | 'detail' | 'promote' | 'deploy' | 'approvals'
+  | 'fleet' | 'detail' | 'promote' | 'deploy' | 'rollback' | 'approvals'
   | 'registry' | 'history' | 'admin' | 'system';
 
 interface AppState {

@@ -73,6 +73,18 @@ public final class Dtos {
                                  String apps, String actions, String startedBy, String startedAt,
                                  String duration, String result, String beforeAfter, String logExcerpt) {}
 
+    // ---- portal-ui channel (fetch / deploy / rollback / verify of the DMZ portal UIs) ----
+    public record PortalUiHost(String host, String ip) {}
+
+    public record PortalUiCatalog(List<String> uis, List<String> modes,
+                                  List<PortalUiHost> prodHosts, PortalUiHost staging) {}
+
+    /** mode = fetch | deploy | rollback | verify. hosts empty = all DMZ hosts (deploy/rollback).
+     *  fixUrl/fixSize apply to deploy; date is the backup suffix (deploy) or which backup
+     *  to restore (rollback). Maps to portalui-deployment/run.sh. */
+    public record PortalUiRequest(String mode, List<String> uis, List<String> hosts,
+                                  boolean fixUrl, boolean fixSize, String date) {}
+
     // ---- fleet ----
     public record ServiceCellView(String svc, String host, String status, String hash, String uptime,
                                   String pid, String ip, String jar, int instances, String lastDeployed) {}

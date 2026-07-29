@@ -45,6 +45,10 @@ nagad:
   # out to this from a worker thread — never inline on the request thread.
   ansible:
     working-dir: ${ANSIBLE_DIR:/home/konasl/motaleb-ansible/stop-deploy-start}
+    # Portal-UI channel wrapper lives in its own package (fetch/deploy/rollback/verify
+    # of the DMZ portal UIs). Its run.sh is invoked from this directory on the jump host.
+    portal-ui:
+      working-dir: ${PORTAL_UI_DIR:/home/konasl/motaleb-ansible/portalui-deployment}
     # In demo mode the runner streams scripted output instead of invoking ansible.
     simulate: ${ANSIBLE_SIMULATE:true}
     # Real runs SSH into the jump host as the ansible operator and invoke ./run.sh there,

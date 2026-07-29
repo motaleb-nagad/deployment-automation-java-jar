@@ -56,7 +56,8 @@ public class DeploymentService {
 
     private record RunPlan(String deploymentId, String actor, Group group, List<String> hosts,
                            List<String> apps, List<String> actions, String cmd, List<Line> lines,
-                           boolean consolidated, List<DeployPair> pairs) {}
+                           boolean consolidated, List<DeployPair> pairs,
+                           boolean portalUi, PortalUiRequest pui) {}
 
     public DeploymentService(FleetInventory inv, AnsibleRunner runner, PromotionRepository promos,
                              DeploymentRepository deployments, DeploymentFinalizer finalizer,
@@ -121,7 +122,7 @@ public class DeploymentService {
         random.nextBytes(buf);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
         pending.put(ticket, new RunPlan(id, actor.getUsername(), g, hosts, req.apps(), req.actions(), cmd,
-                runner.script(g, hosts, req.apps(), req.actions(), inv, cmd), false, null));
+                runner.script(g, hosts, req.apps(), req.actions(), inv, cmd), false, null, false, null));
         return new DeployStartedResponse(id, ticket);
     }
 
@@ -179,7 +180,84 @@ public class DeploymentService {
         random.nextBytes(buf);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
         pending.put(ticket, new RunPlan(id, actor.getUsername(), null, hosts, apps, req.actions(), cmd,
-                runner.scriptConsolidated(pairs, req.actions(), inv, cmd), true, pairs));
+                runner.scriptConsolidated(pairs, req.actions(), inv, cmd), true, pairs, false, null));
+        return new DeployStartedResponse(id, ticket);
+    }
+
+    // ---- portal-ui channel ------------------------------------------------------------------
+
+    private static final List<String> PORTAL_UIS = List.of("system", "dms", "call-center", "operations");
+    private static final List<String> PORTAL_MODES = List.of("fetch", "deploy", "rollback", "verify");
+    private static final java.util.regex.Pattern DATE = java.util.regex.Pattern.compile("^[0-9]{8}$");
+
+    /** UIs, modes and the DMZ prod hosts + staging source the portal-ui channel targets. */
+    @Transactional(readOnly = true)
+    public PortalUiCatalog portalUiCatalog() {
+        List<PortalUiHost> prod = inv.managedGroups().stream()
+                .filter(g -> "web-dmz".equals(g.cmd())).findFirst()
+                .map(g -> g.hosts().stream().map(h -> new PortalUiHost(h.name(), h.ip())).toList())
+                .orElse(List.of());
+        PortalUiHost staging = inv.group("staging-web")
+                .map(g -> g.hosts().get(0)).map(h -> new PortalUiHost(h.name(), h.ip()))
+                .orElse(new PortalUiHost("ngd-dc-portal-01", "10.230.1.207"));
+        return new PortalUiCatalog(PORTAL_UIS, PORTAL_MODES, prod, staging);
+    }
+
+    /** Validate + register a portal-ui run (fetch/deploy/rollback/verify), returning its id. */
+    @Transactional
+    public DeployStartedResponse startPortalUi(AppUser actor, PortalUiRequest req) {
+        if (!actor.isPermX()) {
+            throw new ResponseStatusException(FORBIDDEN, "executing a deploy needs the execute (x) permission");
+        }
+        if (!actor.canAccessGroup("web-dmz")) {
+            throw new ResponseStatusException(FORBIDDEN, "you are not scoped to the web-dmz (portal-ui) group");
+        }
+        String mode = req.mode() == null ? "" : req.mode().trim();
+        if (!PORTAL_MODES.contains(mode)) {
+            throw new ResponseStatusException(BAD_REQUEST, "unknown portal-ui mode " + mode);
+        }
+        if (req.uis() == null || req.uis().isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "pick at least one UI");
+        }
+        for (String ui : req.uis()) {
+            if (!PORTAL_UIS.contains(ui)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown UI " + ui);
+            }
+        }
+        if (req.date() != null && !req.date().isBlank() && !DATE.matcher(req.date().trim()).matches()) {
+            throw new ResponseStatusException(BAD_REQUEST, "date must be DDMMYYYY (8 digits)");
+        }
+
+        PortalUiCatalog cat = portalUiCatalog();
+        Set<String> validHosts = cat.prodHosts().stream().map(PortalUiHost::host)
+                .collect(java.util.stream.Collectors.toSet());
+        List<String> hosts = req.hosts() == null ? List.of() : req.hosts();
+        for (String h : hosts) {
+            if (!TOKEN.matcher(h).matches() || !validHosts.contains(h)) {
+                throw new ResponseStatusException(BAD_REQUEST, "unknown DMZ host " + h);
+            }
+        }
+
+        // Rail hosts: fetch/verify act on staging; deploy/rollback on the chosen (or all) DMZ hosts.
+        List<String> railHosts = switch (mode) {
+            case "fetch", "verify" -> List.of(cat.staging().host());
+            default -> hosts.isEmpty() ? cat.prodHosts().stream().map(PortalUiHost::host).toList() : hosts;
+        };
+        List<String> phases = AnsibleRunner.portalUiPhases(mode);
+
+        String cmd = runner.portalUiCommand(mode, req.uis(), hosts, req.fixUrl(), req.fixSize(), req.date());
+        String id = "DP-" + seq.getAndIncrement();
+        deployments.save(new Deployment(id, null, "portal-ui", AnsibleRunner.hostExpr(railHosts),
+                String.join(",", req.uis()), mode, actor.getUsername()));
+
+        byte[] buf = new byte[32];
+        random.nextBytes(buf);
+        String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
+        PortalUiRequest resolved = new PortalUiRequest(mode, req.uis(), railHosts,
+                req.fixUrl(), req.fixSize(), req.date());
+        pending.put(ticket, new RunPlan(id, actor.getUsername(), null, railHosts, req.uis(), phases, cmd,
+                runner.scriptPortalUi(mode, req.uis(), railHosts, req.fixUrl(), req.fixSize(), req.date(), inv, cmd),
+                false, null, true, resolved));
         return new DeployStartedResponse(id, ticket);
     }
 
@@ -231,11 +309,17 @@ public class DeploymentService {
                     if (!inv.demoPresentOnHost(p.host(), p.app())) skipped.add(p.host() + ":" + p.app());
                 }
             }
-            List<Map<String, String>> rows = plan.consolidated()
-                    ? finalizer.commitConsolidated(plan.deploymentId(), plan.actor(), plan.pairs(),
-                            plan.actions(), plan.cmd(), lastLog, skipped)
-                    : finalizer.commit(plan.deploymentId(), plan.actor(), plan.group().cmd(),
-                            plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
+            List<Map<String, String>> rows;
+            if (plan.portalUi()) {
+                rows = finalizer.commitPortalUi(plan.deploymentId(), plan.actor(), plan.pui(),
+                        plan.hosts(), plan.cmd(), lastLog);
+            } else if (plan.consolidated()) {
+                rows = finalizer.commitConsolidated(plan.deploymentId(), plan.actor(), plan.pairs(),
+                        plan.actions(), plan.cmd(), lastLog, skipped);
+            } else {
+                rows = finalizer.commit(plan.deploymentId(), plan.actor(), plan.group().cmd(),
+                        plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
+            }
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
                     "deploymentId", plan.deploymentId(), "result", "ok", "rows", rows)));
             emitter.complete();
@@ -280,11 +364,21 @@ public class DeploymentService {
                 throw new UncheckedIOException(e);
             }
         };
-        int code = plan.consolidated()
-                ? runner.executeConsolidated(plan.pairs(), plan.actions(), sink)
-                : runner.execute(plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), sink);
+        int code;
+        String wrapper;
+        if (plan.portalUi()) {
+            PortalUiRequest p = plan.pui();
+            code = runner.executePortalUi(p.mode(), p.uis(), plan.hosts(), p.fixUrl(), p.fixSize(), p.date(), sink);
+            wrapper = "portalui run.sh";
+        } else if (plan.consolidated()) {
+            code = runner.executeConsolidated(plan.pairs(), plan.actions(), sink);
+            wrapper = "deploy.sh";
+        } else {
+            code = runner.execute(plan.group().cmd(), plan.hosts(), plan.apps(), plan.actions(), sink);
+            wrapper = "run.sh";
+        }
         if (code != 0) {
-            throw new IllegalStateException((plan.consolidated() ? "deploy.sh" : "run.sh") + " exited with code " + code);
+            throw new IllegalStateException(wrapper + " exited with code " + code);
         }
         return lastLog.toString();
     }

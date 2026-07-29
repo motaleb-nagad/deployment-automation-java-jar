@@ -4,12 +4,14 @@ import { api, ApiError } from '../api/client';
 import { useApp } from '../store/app';
 import { C, rule1, rule2 } from '../theme/colors';
 import type { PromotionView, StagingSource } from '../api/types';
+import { PortalUi } from './PortalUi';
 
 const mono = 'var(--mono)';
 
 export function Promote() {
   const { me, flash } = useApp();
   const qc = useQueryClient();
+  const [channel, setChannel] = useState<'jar' | 'portal-ui'>('jar');
   const [src, setSrc] = useState('staging-core');
   const [apps, setApps] = useState<string[]>([]);
   const [result, setResult] = useState<PromotionView[] | null>(null);
@@ -35,11 +37,34 @@ export function Promote() {
 
   const fetchCmd = `./fetch.sh ${src} ${apps.join(',') || '<apps>'} --check-hash --record`;
 
+  const channelSwitch = (
+    <div style={{ display: 'flex', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', flex: 'none' }}>
+      {([['jar', 'JAR'], ['portal-ui', 'PORTAL UI']] as const).map(([c, label]) => (
+        <button key={c} onClick={() => setChannel(c)} style={{ border: 0, cursor: 'pointer', padding: '6px 12px',
+          fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 9.5, letterSpacing: '.1em',
+          background: channel === c ? 'var(--color-neutral-100)' : 'transparent', color: channel === c ? 'var(--color-text)' : 'var(--color-neutral-500)' }}>{label}</button>
+      ))}
+    </div>
+  );
+
+  if (channel === 'portal-ui') return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 24px 0', flexWrap: 'wrap' }}>
+        <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Fetch from staging</h3>
+        <div style={{ flex: 1 }} />
+        {channelSwitch}
+      </div>
+      <PortalUi modes={['fetch', 'verify']} heading="Fetch portal UI from staging" subtitle="FETCH / VERIFY · MAPS TO portalui/run.sh" />
+    </>
+  );
+
   return (
     <main style={{ padding: '0 24px 56px', maxWidth: 1500 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 14px', flexWrap: 'wrap' }}>
         <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Promote a jar from staging</h3>
-        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>FETCH · MAPS TO ./fetch.sh · CREATES AN APPROVAL REQUEST</div>
+        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>FETCH · MAPS TO ./fetch.sh</div>
+        <div style={{ flex: 1 }} />
+        {channelSwitch}
       </div>
 
       {!canFetch && (

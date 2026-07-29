@@ -8,6 +8,7 @@ const TABS: { label: string; screen: Screen; needsSA?: boolean }[] = [
   { label: 'SERVICES STATUS', screen: 'fleet' },
   { label: 'FETCH JAR FROM STG', screen: 'promote' },
   { label: 'DEPLOY', screen: 'deploy' },
+  { label: 'PORTAL ROLLBACK', screen: 'rollback' },
   { label: 'REGISTRY', screen: 'registry' },
   { label: 'HISTORY', screen: 'history' },
   { label: 'ADMIN', screen: 'admin', needsSA: true },

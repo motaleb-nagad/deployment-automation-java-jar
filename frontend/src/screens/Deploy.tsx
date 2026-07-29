@@ -4,11 +4,12 @@ import { api, ApiError, openDeployStream, type ResultRow } from '../api/client';
 import { useApp } from '../store/app';
 import { C, rule1, rule2, TERM } from '../theme/colors';
 import type { DeployGroup, DeployPair, ConsolidatedPairView } from '../api/types';
+import { PortalUi } from './PortalUi';
 
 const mono = 'var(--mono)';
 const MULTI_INSTANCE = new Set(['apigw', 'apigw-summary']);
 type Step = 'build' | 'confirm' | 'running' | 'result';
-type Mode = 'group' | 'consolidated';
+type Mode = 'group' | 'consolidated' | 'portal-ui';
 interface TermLine { level: string; text: string; }
 
 /** A row in the review step: one service, its actions, and (deploy only) the hash change. */
@@ -138,12 +139,23 @@ export function Deploy() {
 
   const modeSwitch = (
     <div style={{ display: 'flex', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', flex: 'none' }}>
-      {([['group', 'PER-GROUP'], ['consolidated', 'MIXED-GROUP']] as const).map(([m, label]) => (
+      {([['group', 'PER-GROUP'], ['consolidated', 'MIXED-GROUP'], ['portal-ui', 'PORTAL-UI']] as const).map(([m, label]) => (
         <button key={m} onClick={() => { setMode(m); setStep('build'); }} style={{ border: 0, cursor: 'pointer', padding: '6px 12px',
           fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 9.5, letterSpacing: '.1em',
           background: mode === m ? 'var(--color-neutral-100)' : 'transparent', color: mode === m ? 'var(--color-text)' : 'var(--color-neutral-500)' }}>{label}</button>
       ))}
     </div>
+  );
+
+  // ---------- PORTAL-UI (delegated to the shared channel component) ----------
+  if (mode === 'portal-ui') return (
+    <main style={{ padding: '0 24px 0', maxWidth: 1500 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 0', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }} />
+        {modeSwitch}
+      </div>
+      <PortalUi modes={['deploy']} heading="Deploy portal UI" subtitle="STEP 1 OF 3 — MAPS TO portalui/run.sh" />
+    </main>
   );
 
   // ---------- BUILD ----------

@@ -141,6 +141,38 @@ public class DeploymentFinalizer {
         return rows;
     }
 
+    /**
+     * Portal-UI commit — records one row per host×ui with the mode's outcome. UI tarball
+     * deploys have no jar-registry hash, so nothing in the registry changes; this just closes
+     * out the deployment row, writes the audit entry and mails the report.
+     */
+    @Transactional
+    public List<Map<String, String>> commitPortalUi(String deploymentId, String actor,
+                                                    com.nagad.deploy.dto.Dtos.PortalUiRequest pui,
+                                                    List<String> hosts, String cmd, String lastLogLine) {
+        List<Map<String, String>> rows = new ArrayList<>();
+        String mode = pui.mode();
+        String date = pui.date() == null ? "" : pui.date().trim();
+        for (String ui : pui.uis()) {
+            String after = switch (mode) {
+                case "fetch" -> "fetched from staging";
+                case "verify" -> "verified vs staging";
+                case "rollback" -> "rolled back" + (date.isEmpty() ? " (newest backup)" : " to " + date);
+                default -> "deployed" + (pui.fixUrl() ? " +url-fix" : "") + (pui.fixSize() ? " +size-fix" : "");
+            };
+            String verdict = "verify".equals(mode) ? "unchanged" : "changed";
+            for (String h : hosts) {
+                rows.add(Map.of("host", h, "app", ui, "before", mode, "after", after, "verdict", verdict));
+            }
+        }
+        deployments.findById(deploymentId).ifPresent(d ->
+                d.complete("ok", "—", serialize(rows), lastLogLine));
+        audit.record(actor, "portal-ui", mode + " " + String.join(",", pui.uis()),
+                AnsibleRunner.hostExpr(hosts) + " → " + mode);
+        mail.send("devops-team@nagad.com.bd", "Portal-UI " + mode + " complete — " + deploymentId, "Ran " + cmd);
+        return rows;
+    }
+
     private String serialize(List<Map<String, String>> rows) {
         try {
             return json.writeValueAsString(rows);
