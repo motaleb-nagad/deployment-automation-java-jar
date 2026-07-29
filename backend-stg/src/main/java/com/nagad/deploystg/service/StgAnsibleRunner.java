@@ -1,6 +1,5 @@
-package com.nagad.deploy.service;
+package com.nagad.deploystg.service;
 
-import com.nagad.deploy.service.AnsibleRunner.Line;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -21,14 +20,21 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Produces the console stream for a <strong>staging</strong> run, kept fully separate from the
- * production {@link AnsibleRunner}. In demo mode ({@code nagad.ansible.simulate}) it builds
- * scripted Ansible output; in production it SSHes into the jump host and invokes the staging
- * bundle's {@code ./run.sh} / {@code portalui/run.sh}. It also stages manually-uploaded files
- * into the bundle before a run. Reuses only the shared {@link Line} record.
+ * Produces the console stream for a staging run. In demo mode ({@code nagad.ansible.simulate})
+ * it builds scripted Ansible output; in production it SSHes into the jump host and invokes the
+ * {@code stg-deployment} bundle's {@code ./run.sh} / {@code portalui/run.sh}. It also stages
+ * manually-uploaded files into the bundle before a run. Fully self-contained.
  */
 @Component
 public class StgAnsibleRunner {
+
+    /** level: user | dim | ink | task | ok | ch | fatal. rail fields drive the per-host tracker. */
+    public record Line(String level, String text, String railHost, String railAction, String railState) {
+        static Line log(String level, String text) { return new Line(level, text, null, null, null); }
+        static Line host(String level, String text, String host, String action, String state) {
+            return new Line(level, text, host, action, state);
+        }
+    }
 
     /** Bundle-relative directories manually-uploaded files land in (per the stg-deployment layout). */
     public static final String JARS_DIR = "roles/deployment/files/jars";
@@ -45,7 +51,7 @@ public class StgAnsibleRunner {
     private volatile Path readyKey;
 
     public StgAnsibleRunner(
-            @Value("${nagad.ansible.stg.working-dir:/home/konasl/motaleb-ansible/stg-deployment}") String stgDir,
+            @Value("${nagad.ansible.stg.working-dir}") String stgDir,
             @Value("${nagad.ansible.ssh.host:host.docker.internal}") String sshHost,
             @Value("${nagad.ansible.ssh.port:40167}") int sshPort,
             @Value("${nagad.ansible.ssh.user:konasl}") String sshUser,
@@ -59,7 +65,6 @@ public class StgAnsibleRunner {
         this.strictHostKey = strictHostKey;
     }
 
-    /** The staging bundle's working directory on the jump host. */
     public String stgDir() { return stgDir; }
 
     // ---- commands ---------------------------------------------------------------------------
@@ -87,8 +92,7 @@ public class StgAnsibleRunner {
      * Copy an uploaded file to the staging bundle on the jump host. In real mode the bytes are
      * piped over SSH into {@code <stgDir>/<relDir>/<filename>} (the dir is created if missing);
      * in demo mode they are written to a local staging area so the flow is testable offline.
-     * Returns the absolute path the file now lives at. {@code relDir}/{@code filename} are
-     * validated by the caller (service layer) before reaching here.
+     * Returns the absolute path the file now lives at.
      */
     public String stageUpload(boolean simulate, String relDir, String filename, byte[] bytes)
             throws IOException, InterruptedException {
@@ -165,7 +169,7 @@ public class StgAnsibleRunner {
 
     /** Demo mode: scripted staging jar/config output (stop/deploy/start per app on the one host). */
     public List<Line> script(String group, String host, List<String> apps, List<String> actions,
-                             StgInventory inv, FleetInventory fleet, String cmd) {
+                             StgInventory inv, String cmd) {
         List<Line> out = new ArrayList<>();
         out.add(Line.log("user", "$ " + cmd));
         out.add(Line.log("dim", "============================================"));
@@ -183,13 +187,13 @@ public class StgAnsibleRunner {
             for (String app : apps) {
                 String jar = inv.jarFor(group, app).orElse(app + "-1.0.jar");
                 out.add(Line.log("task", stars("TASK [" + a + " : " + app + "]")));
-                long pid = fleet.pid("stg" + group + host + app);
+                long pid = pid("stg" + group + host + app);
                 String text = switch (a) {
                     case "stop" -> "changed: [" + host + "] => " + app + " pid " + pid + " stopped";
                     case "deploy" -> "changed: [" + host + "] => " + jar
                             + " -> /home/" + app + "/was/ (backup: " + jar + ".1753257821~)";
                     default -> "changed: [" + host + "] => " + app + " started, pid "
-                            + fleet.pid("stg" + group + host + app + "n") + " — verified running";
+                            + pid("stg" + group + host + app + "n") + " — verified running";
                 };
                 out.add(Line.host("ch", text, host, a, "done"));
             }
@@ -202,8 +206,7 @@ public class StgAnsibleRunner {
     }
 
     /** Demo mode: scripted staging portal-UI output (copy → backup → extract per UI). */
-    public List<Line> scriptPortalUi(List<String> uis, String date, String host,
-                                     FleetInventory fleet, String cmd) {
+    public List<Line> scriptPortalUi(List<String> uis, String date, String host, String cmd) {
         List<Line> out = new ArrayList<>();
         out.add(Line.log("user", "$ " + cmd));
         out.add(Line.log("dim", "============================================"));
@@ -233,7 +236,7 @@ public class StgAnsibleRunner {
         return out;
     }
 
-    // ---- ssh plumbing (self-contained; mirrors AnsibleRunner but isolated) -------------------
+    // ---- ssh plumbing -----------------------------------------------------------------------
 
     private List<String> sshArgv(String remoteCommand) throws IOException {
         List<String> argv = new ArrayList<>(List.of(
@@ -304,6 +307,18 @@ public class StgAnsibleRunner {
 
     private static String firstActionOf(List<String> actions) {
         return actions.isEmpty() ? "" : actions.get(0);
+    }
+
+    // ---- helpers ----------------------------------------------------------------------------
+
+    /** Deterministic pseudo-PID for scripted demo output (FNV-1a, matching the console style). */
+    private static long pid(String s) {
+        long h = 2166136261L;
+        for (int i = 0; i < s.length(); i++) {
+            h ^= (s.charAt(i) & 0xff);
+            h = (h * 16777619L) & 0xffffffffL;
+        }
+        return 1200 + h % 58000;
     }
 
     private static String shq(String s) {

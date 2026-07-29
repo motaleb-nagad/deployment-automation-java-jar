@@ -1,5 +1,6 @@
 # Java / Maven
 backend/target/
+backend-stg/target/
 *.class
 *.jar
 !.mvn/wrapper/maven-wrapper.jar

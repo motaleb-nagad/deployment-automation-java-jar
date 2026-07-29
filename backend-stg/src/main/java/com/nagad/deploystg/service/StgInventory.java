@@ -1,4 +1,4 @@
-package com.nagad.deploy.service;
+package com.nagad.deploystg.service;
 
 import org.springframework.stereotype.Component;
 
@@ -8,23 +8,18 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Inventory model for the <strong>staging</strong> deployment bundle
- * ({@code stg-deployment/}). Mirrors the wrapper's {@code hosts}, the {@code jar_map} in
- * {@code core.yml} / {@code portal.yml}, and the portal-UI {@code valid_uis} list.
- *
- * <p>Staging is one host per group:
+ * Inventory model for the <strong>staging</strong> deployment bundle ({@code stg-deployment/}).
+ * Mirrors the wrapper's {@code hosts}, the {@code jar_map} in {@code core.yml} / {@code portal.yml},
+ * and the portal-UI {@code valid_uis} list. One host per group:
  * <ul>
  *   <li>{@code core}  → stg-core  (ngd-dc-core-01, 10.230.1.208)</li>
  *   <li>{@code portal} → stg-portal (ngd-dc-portal-01, 10.230.1.207)</li>
  * </ul>
- * The wrapper is always invoked with {@code servers=all} (the whole group is a single host).
  */
 @Component
 public class StgInventory {
 
-    /** One deployable service on a staging group: its app key and the jar file the playbook copies. */
     public record App(String key, String jar) {}
-    /** A staging group (core | portal): its single host and the apps it can deploy. */
     public record Group(String key, String label, String host, String ip, Map<String, String> jarMap) {}
 
     /** Portal-UI names the staging portalui/run.sh accepts (each needs a matching {@code <ui>.tar}). */
@@ -40,14 +35,12 @@ public class StgInventory {
         return Optional.ofNullable(groups.get(key));
     }
 
-    /** Apps for a group as ordered views (key + jar), or empty if the group is unknown. */
     public List<App> apps(String groupKey) {
         Group g = groups.get(groupKey);
         if (g == null) return List.of();
         return g.jarMap().entrySet().stream().map(e -> new App(e.getKey(), e.getValue())).toList();
     }
 
-    /** The jar file name the playbook expects for an app in a group (from the jar_map). */
     public Optional<String> jarFor(String groupKey, String app) {
         Group g = groups.get(groupKey);
         if (g == null) return Optional.empty();

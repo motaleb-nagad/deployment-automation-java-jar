@@ -1,8 +1,8 @@
-package com.nagad.deploy.service;
+package com.nagad.deploystg.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nagad.deploy.repo.DeploymentRepository;
+import com.nagad.deploystg.repo.DeploymentRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,10 +11,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Commits the persistent effects of a completed <strong>staging</strong> run in one transaction —
- * closes out the deployment row, appends the audit entry and mails the report. Staging jars are
- * uploaded ad-hoc (not governed by the jar registry), so — unlike prod — nothing in the registry
- * changes. Separate bean so the {@code @Transactional} proxy applies from the streaming worker.
+ * Commits the persistent effects of a completed staging run in one transaction — closes out the
+ * deployment row, appends the audit entry and mails the report. Separate bean so the
+ * {@code @Transactional} proxy applies from the streaming worker thread.
  */
 @Service
 public class StgFinalizer {

@@ -13,6 +13,8 @@ FROM nginxinc/nginx-unprivileged:1.28-alpine
 # SPA + reverse proxy for /api → backend service.
 COPY --chown=nginx:nginx nginx.conf /etc/nginx/templates/default.conf.template
 COPY --chown=nginx:nginx --from=build /app/dist /usr/share/nginx/html
-# BACKEND_URL is templated into the nginx config at container start.
+# BACKEND_URL / STG_BACKEND_URL are templated into the nginx config at container start.
+# /api/stg is proxied to the separate staging backend; everything else to the main backend.
 ENV BACKEND_URL=http://backend:8080
+ENV STG_BACKEND_URL=http://backend-stg:8080
 EXPOSE 8080
