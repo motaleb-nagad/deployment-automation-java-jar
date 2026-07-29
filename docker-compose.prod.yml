@@ -51,6 +51,9 @@ services:
       ANSIBLE_SSH_USER: ${ANSIBLE_SSH_USER:-konasl}
       ANSIBLE_SSH_KEY: /run/secrets/deploy_key
       ANSIBLE_DIR: ${ANSIBLE_DIR:-/home/konasl/motaleb-ansible/stop-deploy-start}
+      # Staging deployment bundle: uploaded jars/configs/UI tarballs are staged here, then
+      # ./run.sh (and portalui/run.sh) run from this directory on the jump host.
+      STG_DIR: ${STG_DIR:-/home/konasl/motaleb-ansible/stg-deployment}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
       interval: 10s

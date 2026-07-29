@@ -10,6 +10,7 @@ import { Fleet } from './screens/Fleet';
 import { ServiceDetail } from './screens/ServiceDetail';
 import { Promote } from './screens/Promote';
 import { Deploy } from './screens/Deploy';
+import { StgDeployment } from './screens/StgDeployment';
 import { PortalUi } from './screens/PortalUi';
 import { Approvals } from './screens/Approvals';
 import { Registry } from './screens/Registry';
@@ -37,6 +38,16 @@ export function App() {
       .finally(() => setBooting(false));
   }, [setMe]);
 
+  // Keep the SPA screen in sync with browser back/forward for the /stg-deployment deep link.
+  useEffect(() => {
+    const onPop = () => {
+      const isStg = window.location.pathname.replace(/\/+$/, '').endsWith('/stg-deployment');
+      useApp.setState({ screen: isStg ? 'stg' : 'fleet' });
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   if (booting) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--color-neutral-500)' }}>
@@ -58,6 +69,7 @@ export function App() {
       {screen === 'detail' && <ServiceDetail />}
       {screen === 'promote' && <Promote />}
       {screen === 'deploy' && <Deploy />}
+      {screen === 'stg' && <StgDeployment />}
       {screen === 'rollback' && <PortalUi modes={['rollback']} heading="Roll back a portal UI" subtitle="PORTAL-UI · RESTORE A SERVER-SIDE BACKUP" />}
       {screen === 'approvals' && <Approvals />}
       {screen === 'registry' && <Registry />}

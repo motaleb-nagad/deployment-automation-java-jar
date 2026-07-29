@@ -42,6 +42,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/auth/login", "/api/auth/verify", "/api/auth/forgot-password").permitAll()
                 // Deploy stream authorises itself with a single-use ticket (see DeploymentService).
                 .requestMatchers(HttpMethod.GET, "/api/deploy/stream").permitAll()
+                // Staging deploy stream is likewise ticket-authorised (see StgDeploymentService).
+                .requestMatchers(HttpMethod.GET, "/api/stg/stream").permitAll()
                 // Only health/info are exposed (see application.yml); permit just those probes.
                 .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers("/error").permitAll()

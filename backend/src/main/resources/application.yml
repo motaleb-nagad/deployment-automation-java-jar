@@ -7,6 +7,11 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/registrydb}
     username: ${DB_USER:registry}
     password: ${DB_PASSWORD:registry}
+  # Staging jars/UI tarballs are uploaded through the portal, so the request body can be large.
+  servlet:
+    multipart:
+      max-file-size: ${STG_MAX_FILE_SIZE:512MB}
+      max-request-size: ${STG_MAX_REQUEST_SIZE:512MB}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -49,6 +54,10 @@ nagad:
     # of the DMZ portal UIs). Its run.sh is invoked from this directory on the jump host.
     portal-ui:
       working-dir: ${PORTAL_UI_DIR:/home/konasl/motaleb-ansible/portalui-deployment}
+    # Staging deployment bundle. Uploaded jars/configs/UI tarballs are staged under this
+    # directory on the jump host, then ./run.sh (and portalui/run.sh) are invoked from here.
+    stg:
+      working-dir: ${STG_DIR:/home/konasl/motaleb-ansible/stg-deployment}
     # In demo mode the runner streams scripted output instead of invoking ansible.
     simulate: ${ANSIBLE_SIMULATE:true}
     # Real runs SSH into the jump host as the ansible operator and invoke ./run.sh there,
