@@ -1,0 +1,67 @@
+spring:
+  application:
+    name: nagad-stg-deploy-service
+  # Shares the same Postgres as the main console. Flyway is OWNED by the main backend, so it
+  # is disabled here — this service only reads/writes the deployment + audit_log tables.
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/registrydb}
+    username: ${DB_USER:registry}
+    password: ${DB_PASSWORD:registry}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: false
+  # Staging jars / UI tarballs are uploaded through the portal, so the request body can be large.
+  servlet:
+    multipart:
+      max-file-size: ${STG_MAX_FILE_SIZE:512MB}
+      max-request-size: ${STG_MAX_REQUEST_SIZE:512MB}
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+nagad:
+  # The main console backend. This service delegates token validation to it (calls
+  # GET /api/auth/me with the forwarded Authorization header) — a single login for both.
+  main-backend:
+    base-url: ${MAIN_BACKEND_URL:http://backend:8080}
+  ansible:
+    # Staging deployment bundle. Uploaded jars/configs/UI tarballs are staged under this
+    # directory on the jump host, then ./run.sh (and portalui/run.sh) run from here.
+    stg:
+      working-dir: ${STG_DIR:/home/konasl/motaleb-ansible/stg-deployment}
+    # In demo mode the runner streams scripted output instead of invoking ansible / SSH.
+    simulate: ${ANSIBLE_SIMULATE:true}
+    ssh:
+      host: ${ANSIBLE_SSH_HOST:host.docker.internal}
+      port: ${ANSIBLE_SSH_PORT:40167}
+      user: ${ANSIBLE_SSH_USER:konasl}
+      key: ${ANSIBLE_SSH_KEY:/run/secrets/deploy_key}
+      strict-host-key-checking: ${ANSIBLE_SSH_STRICT:false}
+  mail:
+    relay: ${MAIL_RELAY:10.210.2.16:25}
+    from: no-reply@nagad.com.bd
+    simulate: ${MAIL_SIMULATE:true}
+  cors:
+    allowed-origins: ${CORS_ORIGINS:http://localhost:5173}
+
+logging:
+  level:
+    com.nagad.deploystg: INFO

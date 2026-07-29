@@ -51,6 +51,39 @@ services:
       ANSIBLE_SSH_USER: ${ANSIBLE_SSH_USER:-konasl}
       ANSIBLE_SSH_KEY: /run/secrets/deploy_key
       ANSIBLE_DIR: ${ANSIBLE_DIR:-/home/konasl/motaleb-ansible/stop-deploy-start}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # Separate staging deployment service — its own image. Shares the Postgres, delegates auth
+  # to the main backend, and SSHes to the jump host to stage uploads + run the stg wrapper.
+  backend-stg:
+    image: bhuiyanshakil/deployment-automation-backend-stg:latest
+    restart: always
+    privileged: true
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./secrets/deploy_key:/run/secrets/deploy_key:ro
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-registrydb}
+      DB_USER: ${POSTGRES_USER:-registry}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-registry}
+      MAIN_BACKEND_URL: ${MAIN_BACKEND_URL:-http://backend:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://10.220.2.46:8088}
+      MAIL_SIMULATE: ${MAIL_SIMULATE:-true}
+      ANSIBLE_SIMULATE: ${ANSIBLE_SIMULATE:-false}
+      ANSIBLE_SSH_HOST: ${ANSIBLE_SSH_HOST:-host.docker.internal}
+      ANSIBLE_SSH_PORT: ${ANSIBLE_SSH_PORT:-40167}
+      ANSIBLE_SSH_USER: ${ANSIBLE_SSH_USER:-konasl}
+      ANSIBLE_SSH_KEY: /run/secrets/deploy_key
       # Staging deployment bundle: uploaded jars/configs/UI tarballs are staged here, then
       # ./run.sh (and portalui/run.sh) run from this directory on the jump host.
       STG_DIR: ${STG_DIR:-/home/konasl/motaleb-ansible/stg-deployment}
@@ -66,8 +99,10 @@ services:
     privileged: true
     depends_on:
       - backend
+      - backend-stg
     environment:
       BACKEND_URL: http://backend:8080
+      STG_BACKEND_URL: http://backend-stg:8080
     ports:
       - "8088:8080"
 

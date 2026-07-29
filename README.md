@@ -23,7 +23,7 @@ Implemented from the [Claude Design](https://claude.ai/design) handoff in this r
 | **Fleet** | Read-only dashboard: what's down, hash drift across a group, unexpected restarts. Collector-backed (not live); two demo scenarios — `incident` and `healthy`. |
 | **Promote** | Fetch a built jar from staging → reads its hash, records it to `registry-db`, emails the super admin, opens an approval request. Never touches production. |
 | **Deploy** | Build a `./run.sh`-equivalent (group → hosts → apps → actions), confirm the blast radius, then stream the run live per-host. A `deploy` action is **locked** unless the jar is approved. |
-| **Stg Deployment** | The **staging** channel (`/stg-deployment`), backed by a wholly separate service. Upload-driven: upload a jar / `application.properties` / UI tarball, the portal stages it into the `stg-deployment` bundle on the jump host, then runs `./run.sh` (core/portal) or `portalui/run.sh` live. |
+| **Stg Deployment** | The **staging** channel (`/stg-deployment`), backed by a wholly separate backend **container** (`deployment-automation-backend-stg`). Upload-driven: upload a jar / `application.properties` / UI tarball, the service stages it into the `stg-deployment` bundle on the jump host, then runs `./run.sh` (core/portal) or `portalui/run.sh` live. |
 | **Approvals** | Super-admin gate — approve or deny pending promotions. Nothing reaches production without a decision here. |
 | **Registry** | Persistent record of every governed jar: current prod hash + latest promotion. |
 | **History** | Full audit trail of every run with before/after hashes and a log excerpt. |
@@ -178,11 +178,16 @@ Flip these env vars (see `k8s/20-backend.yaml` / `docker-compose.yml`) and wire 
 
 ## Staging deployment (`/stg-deployment`)
 
-A **separate** channel for the `stg-deployment` Ansible bundle — its own backend service
-(`StgDeploymentService` / `StgAnsibleRunner`, endpoints under `/api/stg`, its own SSE stream),
-so the governed production path is untouched. Unlike prod (which *fetches* governed jars),
-staging is **upload-driven**: the operator uploads the build from the portal, the portal stages
-it on the jump host, then runs the wrapper.
+A **separate deployable** for the `stg-deployment` Ansible bundle: its own Spring Boot app in
+`backend-stg/` → image **`deployment-automation-backend-stg`**, running as its own container. It
+serves only `/api/stg/**`; nginx routes that prefix to it and everything else to the main
+backend, so the governed production path is untouched. Unlike prod (which *fetches* governed
+jars), staging is **upload-driven**: the operator uploads the build from the portal, the service
+stages it on the jump host, then runs the wrapper.
+
+The staging service **shares the main Postgres** (Flyway off — the main backend owns the schema;
+staging runs still appear in History/audit) and **delegates authentication** to the main backend
+(it validates each bearer token via `GET /api/auth/me`, so there's a single login for both).
 
 | Channel | Upload → jump-host path (under `STG_DIR`) | Wrapper |
 |---|---|---|
@@ -201,6 +206,7 @@ the wrappers run. Upload size is bounded by `STG_MAX_FILE_SIZE` (default 512 MB)
 
 ```
 backend/    Spring Boot 3 API + Flyway migrations (db/migration, db/migration-pg, db/migration-h2)
+backend-stg/ Standalone staging deploy service (image deployment-automation-backend-stg); serves /api/stg/*
 frontend/   React + TS + Vite SPA (screens/, components/, api/, store/, theme/)
 k8s/        Kubernetes manifests (namespace, postgres, backend, frontend, ingress)
 project/    the original Claude Design prototype this was built from

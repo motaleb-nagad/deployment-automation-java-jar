@@ -41,12 +41,40 @@ services:
     ports:
       - "8080:8080"
 
+  # Separate staging deployment service — its own image, shares the Postgres, delegates auth
+  # to the main backend. Serves only /api/stg/*.
+  backend-stg:
+    build: ./backend-stg
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-registrydb}
+      DB_USER: ${POSTGRES_USER:-registry}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-registry}
+      CORS_ORIGINS: http://localhost:8088
+      MAIN_BACKEND_URL: http://backend:8080
+      MAIL_SIMULATE: "true"
+      ANSIBLE_SIMULATE: "true"
+      STG_DIR: /home/konasl/motaleb-ansible/stg-deployment
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "8081:8080"
+
   frontend:
     build: ./frontend
     depends_on:
       - backend
+      - backend-stg
     environment:
       BACKEND_URL: http://backend:8080
+      STG_BACKEND_URL: http://backend-stg:8080
     ports:
       - "8088:8080"
 

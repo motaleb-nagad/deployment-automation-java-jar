@@ -1,10 +1,10 @@
-package com.nagad.deploy.service;
+package com.nagad.deploystg.service;
 
-import com.nagad.deploy.domain.AppUser;
-import com.nagad.deploy.domain.Deployment;
-import com.nagad.deploy.dto.Dtos.*;
-import com.nagad.deploy.repo.DeploymentRepository;
-import com.nagad.deploy.service.AnsibleRunner.Line;
+import com.nagad.deploystg.domain.Deployment;
+import com.nagad.deploystg.dto.Dtos.*;
+import com.nagad.deploystg.repo.DeploymentRepository;
+import com.nagad.deploystg.security.StgUser;
+import com.nagad.deploystg.service.StgAnsibleRunner.Line;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,10 +26,9 @@ import java.util.function.Consumer;
 import static org.springframework.http.HttpStatus.*;
 
 /**
- * The <strong>staging</strong> deployment flow ({@code stg-deployment} bundle). Unlike the prod
- * channel — which fetches built jars from staging and gates them behind approval — staging is
- * <em>upload-driven</em>: the operator manually uploads a jar / config / UI tarball, the portal
- * stages it into the bundle on the jump host, then runs the staging wrapper:
+ * The <strong>staging</strong> deployment flow ({@code stg-deployment} bundle). Upload-driven:
+ * the operator manually uploads a jar / config / UI tarball, this service stages it into the
+ * bundle on the jump host, then runs the staging wrapper:
  * <ul>
  *   <li>jar/config: {@code ./run.sh <core|portal> all <apps> <actions>}</li>
  *   <li>portal-ui:  {@code portalui/run.sh <uis> [date]}</li>
@@ -43,7 +42,6 @@ public class StgDeploymentService {
 
     private final StgInventory inv;
     private final StgAnsibleRunner runner;
-    private final FleetInventory fleet;
     private final DeploymentRepository deployments;
     private final StgFinalizer finalizer;
     private final ExecutorService executor;
@@ -51,7 +49,6 @@ public class StgDeploymentService {
     @Value("${nagad.ansible.simulate}")
     private boolean simulate;
 
-    // Shell-safe token: anything reaching the wrapper command line may only contain these chars.
     private static final java.util.regex.Pattern TOKEN = java.util.regex.Pattern.compile("^[A-Za-z0-9_.-]+$");
     private static final java.util.regex.Pattern DATE = java.util.regex.Pattern.compile("^[0-9]{8}$");
     private static final long MAX_UPLOAD_BYTES = 512L * 1024 * 1024; // 512 MB
@@ -64,12 +61,11 @@ public class StgDeploymentService {
                            String group, String host, List<String> apps, List<String> actions,
                            List<String> uis, String date, String cmd, List<Line> lines) {}
 
-    public StgDeploymentService(StgInventory inv, StgAnsibleRunner runner, FleetInventory fleet,
+    public StgDeploymentService(StgInventory inv, StgAnsibleRunner runner,
                                 DeploymentRepository deployments, StgFinalizer finalizer,
                                 ExecutorService runExecutor) {
         this.inv = inv;
         this.runner = runner;
-        this.fleet = fleet;
         this.deployments = deployments;
         this.finalizer = finalizer;
         this.executor = runExecutor;
@@ -77,7 +73,6 @@ public class StgDeploymentService {
 
     // ---- catalog ----------------------------------------------------------------------------
 
-    @Transactional(readOnly = true)
     public StgCatalog catalog() {
         List<StgGroupView> groups = inv.groups().stream().map(g -> new StgGroupView(
                 g.key(), g.label(), g.host(), g.ip(),
@@ -94,8 +89,8 @@ public class StgDeploymentService {
      * app → stored as {@code <app>-application.properties}) or {@code portalui} (needs a valid UI
      * → stored as {@code <ui>.tar}). Requires the write (w) permission.
      */
-    public StgUploadResponse upload(AppUser actor, String kind, String group, String target, MultipartFile file) {
-        if (!actor.isPermW()) {
+    public StgUploadResponse upload(StgUser actor, String kind, String group, String target, MultipartFile file) {
+        if (!actor.w()) {
             throw new ResponseStatusException(FORBIDDEN, "uploading a build needs the write (w) permission");
         }
         if (file == null || file.isEmpty()) {
@@ -120,7 +115,6 @@ public class StgDeploymentService {
                 relDir = StgAnsibleRunner.JARS_DIR;
             }
             case "cfg" -> {
-                // A config file belongs to an app in one of the groups.
                 if (inv.jarFor("core", tgt).isEmpty() && inv.jarFor("portal", tgt).isEmpty()) {
                     throw new ResponseStatusException(BAD_REQUEST, "unknown app " + tgt);
                 }
@@ -150,8 +144,8 @@ public class StgDeploymentService {
     // ---- jar/config deploy ------------------------------------------------------------------
 
     @Transactional
-    public DeployStartedResponse startDeploy(AppUser actor, StgDeployRequest req) {
-        if (!actor.isPermX()) {
+    public DeployStartedResponse startDeploy(StgUser actor, StgDeployRequest req) {
+        if (!actor.x()) {
             throw new ResponseStatusException(FORBIDDEN, "executing a deploy needs the execute (x) permission");
         }
         String group = requireGroup(req.group());
@@ -172,19 +166,19 @@ public class StgDeploymentService {
         String cmd = runner.command(group, req.apps(), req.actions());
         String id = "STG-" + seq.getAndIncrement();
         deployments.save(new Deployment(id, null, "stg-" + group, g.host(),
-                String.join(",", req.apps()), String.join(",", req.actions()), actor.getUsername()));
+                String.join(",", req.apps()), String.join(",", req.actions()), actor.username()));
 
-        RunPlan plan = new RunPlan(id, actor.getUsername(), false, group, g.host(),
+        RunPlan plan = new RunPlan(id, actor.username(), false, group, g.host(),
                 req.apps(), req.actions(), null, null, cmd,
-                runner.script(group, g.host(), req.apps(), req.actions(), inv, fleet, cmd));
+                runner.script(group, g.host(), req.apps(), req.actions(), inv, cmd));
         return register(plan);
     }
 
     // ---- portal-ui deploy -------------------------------------------------------------------
 
     @Transactional
-    public DeployStartedResponse startPortalUi(AppUser actor, StgPortalUiRequest req) {
-        if (!actor.isPermX()) {
+    public DeployStartedResponse startPortalUi(StgUser actor, StgPortalUiRequest req) {
+        if (!actor.x()) {
             throw new ResponseStatusException(FORBIDDEN, "executing a deploy needs the execute (x) permission");
         }
         if (req.uis() == null || req.uis().isEmpty()) {
@@ -203,11 +197,11 @@ public class StgDeploymentService {
         String cmd = runner.portalUiCommand(req.uis(), date);
         String id = "STG-" + seq.getAndIncrement();
         deployments.save(new Deployment(id, null, "stg-portal-ui", host,
-                String.join(",", req.uis()), "deploy", actor.getUsername()));
+                String.join(",", req.uis()), "deploy", actor.username()));
 
-        RunPlan plan = new RunPlan(id, actor.getUsername(), true, "portal", host,
+        RunPlan plan = new RunPlan(id, actor.username(), true, "portal", host,
                 null, List.of("deploy"), req.uis(), date, cmd,
-                runner.scriptPortalUi(req.uis(), date, host, fleet, cmd));
+                runner.scriptPortalUi(req.uis(), date, host, cmd));
         return register(plan);
     }
 
@@ -221,7 +215,6 @@ public class StgDeploymentService {
 
     // ---- SSE stream -------------------------------------------------------------------------
 
-    /** SSE stream of a staging run, authorised by the single-use ticket from the start call. */
     public SseEmitter stream(String ticket) {
         RunPlan plan = ticket == null ? null : pending.remove(ticket); // single use
         SseEmitter emitter = new SseEmitter(0L);
