@@ -44,13 +44,11 @@ export function System() {
 
       <section style={{ borderTop: rule2, padding: '18px 0' }}>
         <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 12px' }}>GOVERNANCE — HOW A BUILD REACHES PRODUCTION</h6>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 2, maxWidth: 960 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 2, maxWidth: 720 }}>
           {[
-            ['1', 'PROMOTE', 'var(--color-neutral-100)', 'Operator (w) fetches a jar from staging. Hash read, recorded to registry-db.'],
-            ['2', 'EMAIL', C.warn, 'Details mailed to the super admin via the ops relay. Request enters PENDING.'],
-            ['3', 'APPROVE', C.run, 'Super admin approves or denies in the Approvals queue. Decision logged.'],
-            ['4', 'DEPLOY', 'var(--color-neutral-100)', 'Operator (x) deploys the approved jar — the deploy phase is locked until then.'],
-            ['5', 'RECORD', C.run, 'Registry marks it deployed; before/after hashes and the run land in the audit log.'],
+            ['1', 'PROMOTE', 'var(--color-neutral-100)', 'Operator (w) fetches a jar from staging; its git commit hash is read and recorded to registry-db. Reviewed before it is recorded.'],
+            ['2', 'DEPLOY', 'var(--color-neutral-100)', 'Operator (x) runs stop / deploy / start against production. The blast radius is confirmed on a review step first.'],
+            ['3', 'RECORD', C.run, 'Registry marks it deployed; before/after hashes and the run land in the append-only audit log.'],
           ].map(([n, t, col, d]) => (
             <div key={n} style={{ background: 'var(--color-neutral-900)', padding: 14 }}>
               <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 20, color: col }}>{n}</div>
@@ -59,7 +57,7 @@ export function System() {
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', marginTop: 10 }}>Every state and hash is persisted in registry-db (Postgres) — the console is a stateless view over it. The Spring Boot API enforces the gate server-side; the UI only reflects it.</div>
+        <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', marginTop: 10 }}>Every state and hash is persisted in registry-db (Postgres) — the console is a stateless view over it. RBAC (r/w/x) is enforced server-side; the UI only reflects it.</div>
       </section>
     </main>
   );
