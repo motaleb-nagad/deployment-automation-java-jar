@@ -26,10 +26,14 @@ export function Admin() {
   const [x, setX] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const canCreate = username.trim().length > 0 && password.length >= 6;
+  const emailOk = /@nagad\.com\.bd$/i.test(username.trim());
+  const canCreate = username.trim().length > 0 && emailOk && password.length >= 6;
 
   async function create() {
-    if (!canCreate) return;
+    if (!canCreate) {
+      if (username.trim().length > 0 && !emailOk) flash('Account email must be an @nagad.com.bd address', 'var(--color-accent)');
+      return;
+    }
     setBusy(true);
     try {
       await api.post('/admin/users', {
@@ -72,7 +76,8 @@ export function Admin() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 220 }}>
             <label style={cap}>ACCOUNT (EMAIL)</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="user@nagad.com.bd" autoComplete="off" style={inp} />
+            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="user@nagad.com.bd" autoComplete="off" style={{ ...inp, border: username.trim().length > 0 && !emailOk ? '1px solid var(--color-accent)' : border }} />
+            <span style={{ fontFamily: mono, fontSize: 10, marginTop: 4, color: username.trim().length > 0 && !emailOk ? 'var(--color-accent)' : 'var(--color-neutral-600)' }}>must be an @nagad.com.bd address</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 160 }}>
             <label style={cap}>NAME</label>

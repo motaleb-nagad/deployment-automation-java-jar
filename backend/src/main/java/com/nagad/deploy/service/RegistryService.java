@@ -55,6 +55,10 @@ public class RegistryService {
         if (username.isEmpty() || req.password() == null || req.password().length() < 6) {
             throw new ResponseStatusException(BAD_REQUEST, "username required and password must be at least 6 characters");
         }
+        // Accounts are corporate identities: the login/email must be an @nagad.com.bd address.
+        if (!username.toLowerCase().endsWith("@nagad.com.bd")) {
+            throw new ResponseStatusException(BAD_REQUEST, "account email must be an @nagad.com.bd address");
+        }
         if (users.existsById(username)) {
             throw new ResponseStatusException(CONFLICT, "user " + username + " already exists");
         }

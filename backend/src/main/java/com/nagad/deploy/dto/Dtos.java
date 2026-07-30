@@ -113,6 +113,33 @@ public final class Dtos {
     public record CreateUserRequest(String username, String name, String email, String role,
                                     String scope, boolean r, boolean w, boolean x, String password) {}
 
+    // ---- application-properties (surgical in-place editing of application.properties) ----
+    /** An app on a host whose properties can be edited, plus the on-host cfg path. */
+    public record PropAppView(String key, String jar, String cfgFile) {}
+
+    /** A managed group with its hosts and the apps whose properties can be edited. */
+    public record PropGroupView(String key, String cmd, String zone, String tier,
+                                List<String> hosts, List<PropAppView> apps) {}
+
+    /** Everything the application-properties screen needs: the host/app tree (like Deploy),
+     *  the operations, and which ops take a pasted block. */
+    public record PropertiesCatalog(List<PropGroupView> groups, List<String> ops,
+                                    List<String> blockOps, String cfgPathTemplate) {}
+
+    /** A properties edit request. {@code op} selects which of the op-specific fields apply.
+     *  {@code block} is the pasted text for append/insert (staged to a file on the server). */
+    public record PropertiesRequest(String host, String app, String op, boolean testMode,
+                                    String oldLine, String newLine, String key, String values,
+                                    String oldKey, String newKey, String afterLine, String block) {}
+
+    /** One classified console line of a properties run (level: user|dim|ink|task|ok|ch|fatal|add|del). */
+    public record PropTermLine(String level, String text) {}
+
+    /** The outcome of a properties edit — the command run, the target file, and the console output. */
+    public record PropertiesResult(String command, String targetFile, String backupFile,
+                                   boolean testMode, boolean changed, String savedBlockPath,
+                                   List<PropTermLine> lines) {}
+
     // ---- audit ----
     public record AuditRow(String ts, String actor, String verb, String target, String detail) {}
 }

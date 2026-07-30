@@ -132,8 +132,10 @@ public class StgDeploymentService {
         }
 
         try {
-            String path = runner.stageUpload(simulate, relDir, storedName, file.getBytes());
-            return new StgUploadResponse(k, tgt, storedName, path, file.getSize());
+            byte[] bytes = file.getBytes();
+            String sha256 = sha256Hex(bytes);
+            String path = runner.stageUpload(simulate, relDir, storedName, bytes);
+            return new StgUploadResponse(k, tgt, storedName, path, file.getSize(), sha256);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.warn("stg upload {} {} failed: {}", k, tgt, e.toString());
@@ -288,6 +290,18 @@ public class StgDeploymentService {
         if (ln.railHost() != null) {
             emitter.send(SseEmitter.event().name("host").data(Map.of(
                     "host", ln.railHost(), "action", ln.railAction(), "state", ln.railState())));
+        }
+    }
+
+    /** SHA-256 of the uploaded bytes, as lower-case hex — the hash of the jar/config/tar we stage. */
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e); // never on a standard JRE
         }
     }
 

@@ -30,7 +30,8 @@ export function Promote() {
       setApps([]);
       qc.invalidateQueries({ queryKey: ['promotions'] });
       qc.invalidateQueries({ queryKey: ['approvals'] });
-      flash(`Fetched ${created.length} jar(s) — approval requested, super admin emailed`);
+      const hashes = created.map((c) => `${c.app} ${c.hash}`).join(', ');
+      flash(`Fetched ${created.length} jar(s) — hash: ${hashes}`);
     },
     onError: (e) => flash(e instanceof ApiError ? e.message : 'fetch failed', C.stop),
   });

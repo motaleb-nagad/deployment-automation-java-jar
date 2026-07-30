@@ -56,7 +56,7 @@ export interface ConsolidatedPairView {
 export interface StgAppView { key: string; jar: string; }
 export interface StgGroupView { key: string; label: string; host: string; ip: string; apps: StgAppView[]; }
 export interface StgCatalog { groups: StgGroupView[]; uis: string[]; workingDir: string; }
-export interface StgUploadResponse { kind: string; target: string; storedName: string; targetPath: string; size: number; }
+export interface StgUploadResponse { kind: string; target: string; storedName: string; targetPath: string; size: number; sha256: string; }
 export interface StgDeployRequest { group: string; apps: string[]; actions: string[]; }
 export interface StgPortalUiRequest { uis: string[]; date: string; }
 
@@ -77,4 +77,23 @@ export interface AdminRow {
 
 export interface AuditRow {
   ts: string; actor: string; verb: string; target: string; detail: string | null;
+}
+
+// ---- application-properties (surgical in-place editing of application.properties) ----
+export interface PropAppView { key: string; jar: string; cfgFile: string; }
+export interface PropGroupView {
+  key: string; cmd: string; zone: string; tier: string; hosts: string[]; apps: PropAppView[];
+}
+export interface PropertiesCatalog {
+  groups: PropGroupView[]; ops: string[]; blockOps: string[]; cfgPathTemplate: string;
+}
+export interface PropertiesRequest {
+  host: string; app: string; op: string; testMode: boolean;
+  oldLine?: string; newLine?: string; key?: string; values?: string;
+  oldKey?: string; newKey?: string; afterLine?: string; block?: string;
+}
+export interface PropTermLine { level: string; text: string; }
+export interface PropertiesResult {
+  command: string; targetFile: string; backupFile: string;
+  testMode: boolean; changed: boolean; savedBlockPath: string | null; lines: PropTermLine[];
 }

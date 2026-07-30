@@ -16,7 +16,7 @@ export interface Me {
 
 export type Screen =
   | 'fleet' | 'detail' | 'promote' | 'deploy' | 'stg' | 'rollback' | 'approvals'
-  | 'registry' | 'history' | 'admin' | 'system';
+  | 'registry' | 'history' | 'admin' | 'system' | 'properties';
 
 // Deep-link support for the staging console: /stg-deployment maps to the 'stg' screen.
 // Every other screen shares the SPA root path (they are not individually deep-linked).

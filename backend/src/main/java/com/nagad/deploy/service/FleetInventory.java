@@ -117,7 +117,10 @@ public class FleetInventory {
         j.put("map", "mobile-platform-1.0.jar");
         j.put("mps", "merchant-payout-system-1.0.jar");
         j.put("npsb_recon", "npsb-reconciliation-1.0.0.jar");
+        j.put("npsb_parser", "npsb-parser-1.0.0.jar");
         j.put("pcs", "prepaid-card-service-1.0.jar");
+        j.put("png", "payment-network-gateway.jar");
+        j.put("pp", "payment-processor-1.0.jar");
         j.put("portal_davs", "data-analytics-visualization-system-1.0.jar");
         j.put("portal_dfs", "mobile-banking-service-1.0.jar");
         j.put("rms", "reward-management-service-1.0.jar");
@@ -192,6 +195,15 @@ public class FleetInventory {
                 svcs(List.of("ussdgwrobi", "ussdgwttalk", "ussdgwblink", "ussdgwgp", "outboundproxy"))));
         g.add(new Group("nagad-apigwdoc", "apigwdoc", "DMZ", "doc API gateway · user apigw · 3 INST",
                 seq("apigwdoc", 1, 3, "10.210.10", 61), List.of(new Svc("apigw", 3, JAR_MAP.get("apigw")))));
+        // NPSB tiers — each backed by its own npsb-*.yml playbook (src 10.220.2.46, port 40167).
+        g.add(new Group("nagad-npsb-apigw", "npsb-apigw", "DMZ", "NPSB API gateway · npsb-apigw1–2",
+                seq("npsb-apigw", 1, 2, "10.210.10", 135), svcs(List.of("apigw"))));
+        g.add(new Group("nagad-npsb-spg", "npsb-spg", "DMZ", "NPSB secure payment gateway · npsb-spg1–2",
+                seq("npsb-spg", 1, 2, "10.210.10", 210), svcs(List.of("spg"))));
+        g.add(new Group("nagad-npsb-pp", "npsb-pp", "DC", "NPSB payment processor + parser · npsb-pp1",
+                seq("npsb-pp", 1, 1, "10.220.10", 218), svcs(List.of("pp", "npsb_parser"))));
+        g.add(new Group("nagad-npsb-png", "npsb-png", "DMZ", "NPSB payment network gateway · npsb-png1",
+                seq("npsb-png", 1, 1, "10.210.10", 37), svcs(List.of("png"))));
         // Staging sources (not managed by run.sh — promotion sources only).
         g.add(new Group("staging-core", null, "STG", "staging — promotion source",
                 List.of(new Host("ngd-dc-core-01", "10.230.1.208")), List.of()));

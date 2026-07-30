@@ -11,6 +11,7 @@ import { ServiceDetail } from './screens/ServiceDetail';
 import { Promote } from './screens/Promote';
 import { Deploy } from './screens/Deploy';
 import { StgDeployment } from './screens/StgDeployment';
+import { Properties } from './screens/Properties';
 import { PortalUi } from './screens/PortalUi';
 import { Approvals } from './screens/Approvals';
 import { Registry } from './screens/Registry';
@@ -70,6 +71,7 @@ export function App() {
       {screen === 'promote' && <Promote />}
       {screen === 'deploy' && <Deploy />}
       {screen === 'stg' && <StgDeployment />}
+      {screen === 'properties' && <Properties />}
       {screen === 'rollback' && <PortalUi modes={['rollback']} heading="Roll back a portal UI" subtitle="PORTAL-UI · RESTORE A SERVER-SIDE BACKUP" />}
       {screen === 'approvals' && <Approvals />}
       {screen === 'registry' && <Registry />}
