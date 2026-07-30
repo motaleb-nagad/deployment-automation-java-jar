@@ -7,13 +7,16 @@ import type { PromotionView, StagingSource } from '../api/types';
 import { PortalUi } from './PortalUi';
 
 const mono = 'var(--mono)';
+type Step = 'build' | 'review' | 'result';
 
 export function Promote() {
   const { me, flash } = useApp();
   const qc = useQueryClient();
   const [channel, setChannel] = useState<'jar' | 'portal-ui'>('jar');
+  const [step, setStep] = useState<Step>('build');
   const [src, setSrc] = useState('staging-core');
   const [apps, setApps] = useState<string[]>([]);
+  const [preview, setPreview] = useState<PromotionView[] | null>(null);
   const [result, setResult] = useState<PromotionView[] | null>(null);
 
   const canFetch = !!me?.w;
@@ -23,18 +26,27 @@ export function Promote() {
   const source = sources?.find((s) => s.key === src);
   const toggle = (a: string) => setApps((p) => (p.includes(a) ? p.filter((x) => x !== a) : [...p, a]));
 
+  // STEP 1 → 2: read the staging hash(es), record nothing yet.
+  const previewMut = useMutation({
+    mutationFn: () => api.post<PromotionView[]>('/promotions/preview', { srcGroup: src, apps }),
+    onSuccess: (rows) => { setPreview(rows); setStep('review'); },
+    onError: (e) => flash(e instanceof ApiError ? e.message : 'hash check failed', C.stop),
+  });
+
+  // STEP 2 → 3: actually fetch — records the jar to registry-db.
   const fetchMut = useMutation({
     mutationFn: () => api.post<PromotionView[]>('/promotions/fetch', { srcGroup: src, apps }),
     onSuccess: (created) => {
       setResult(created);
-      setApps([]);
+      setStep('result');
       qc.invalidateQueries({ queryKey: ['promotions'] });
-      qc.invalidateQueries({ queryKey: ['approvals'] });
       const hashes = created.map((c) => `${c.app} ${c.hash}`).join(', ');
       flash(`Fetched ${created.length} jar(s) — hash: ${hashes}`);
     },
     onError: (e) => flash(e instanceof ApiError ? e.message : 'fetch failed', C.stop),
   });
+
+  function reset() { setStep('build'); setApps([]); setPreview(null); setResult(null); }
 
   const fetchCmd = `./fetch.sh ${src} ${apps.join(',') || '<apps>'} --check-hash --record`;
 
@@ -59,11 +71,64 @@ export function Promote() {
     </>
   );
 
+  // ---------- REVIEW ----------
+  if (step === 'review') {
+    return (
+      <main style={{ padding: '0 24px 56px', maxWidth: 1100, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 14px' }}>
+          <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Review — staging hash</h3>
+          <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>STEP 2 OF 2 — NOTHING FETCHED YET</div>
+        </div>
+        <div style={{ borderTop: rule2, paddingTop: 18, display: 'grid', gap: 18 }}>
+          <div style={{ background: 'color-mix(in srgb, black 40%, var(--color-text))', padding: 14, fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)', wordBreak: 'break-all' }}>$ {fetchCmd}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--color-neutral-400)' }}>Git commit hash read from the staged jar (matches <span style={{ fontFamily: mono }}>hash-check.sh</span>), shown against what production runs now. Nothing is recorded until you confirm.</div>
+          <div>
+            <FetchHeader />
+            {preview?.map((pr, i) => <FetchRow key={i} pr={pr} />)}
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <button onClick={() => setStep('build')} style={editBtn}>← BACK</button>
+            <button onClick={() => fetchMut.mutate()} disabled={fetchMut.isPending}
+              style={{ border: 0, background: 'var(--color-accent)', color: 'var(--color-neutral-100)', cursor: 'pointer', padding: '12px 22px', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 12, letterSpacing: '.1em', opacity: fetchMut.isPending ? 0.6 : 1 }}>
+              {fetchMut.isPending ? 'FETCHING…' : 'CONFIRM FETCH →'}
+            </button>
+            <div style={{ fontSize: 11, color: 'var(--color-neutral-500)' }}>Records the jar + hash to registry-db. Does not touch production.</div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // ---------- RESULT ----------
+  if (step === 'result') {
+    return (
+      <main style={{ padding: '0 24px 56px', maxWidth: 1100, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 0 14px', flexWrap: 'wrap' }}>
+          <span style={{ width: 13, height: 13, background: C.run }} />
+          <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Fetched from staging</h3>
+          <div style={{ fontSize: 12, color: 'var(--color-neutral-500)' }}>recorded to registry-db · hash shown against production.</div>
+          <div style={{ flex: 1 }} />
+          <button onClick={reset} style={editBtn}>↺ NEW FETCH</button>
+        </div>
+        <div style={{ borderTop: rule2, paddingTop: 12 }}>
+          <FetchHeader />
+          {result?.map((pr) => <FetchRow key={pr.id} pr={pr} />)}
+        </div>
+        <section style={{ marginTop: 34, overflowX: 'auto' }}>
+          <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 6px' }}>FETCHED JARS — STAGING vs PRODUCTION</h6>
+          <FetchHeader />
+          {mine?.map((mr) => <FetchRow key={mr.id} pr={mr} />)}
+        </section>
+      </main>
+    );
+  }
+
+  // ---------- BUILD ----------
   return (
     <main style={{ padding: '0 24px 56px', maxWidth: 1500 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 14px', flexWrap: 'wrap' }}>
         <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Promote a jar from staging</h3>
-        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>FETCH · MAPS TO ./fetch.sh</div>
+        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>STEP 1 OF 2 — FETCH · MAPS TO ./fetch.sh</div>
         <div style={{ flex: 1 }} />
         {channelSwitch}
       </div>
@@ -111,27 +176,15 @@ export function Promote() {
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: 12, borderLeft: `2px solid ${C.run}`, background: 'color-mix(in srgb, oklch(0.72 0.15 152) 8%, transparent)', fontSize: 12, color: 'var(--color-neutral-200)' }}>
               <span style={{ width: 10, height: 10, background: C.run, marginTop: 3, flex: 'none' }} />
-              Fetching pulls the jar, reads its git hash, records it in registry-db, and emails the details to the super admin. It does <strong>not</strong> touch production — deploy stays locked until the request is approved.
+              Fetching pulls the jar from staging, reads its <strong>git commit hash</strong>, and records it in registry-db. It does <strong>not</strong> touch production. You review the hash before it is recorded.
             </div>
-            <button onClick={() => fetchMut.mutate()} disabled={apps.length === 0 || fetchMut.isPending}
+            <button onClick={() => previewMut.mutate()} disabled={apps.length === 0 || previewMut.isPending}
               style={{ border: 0, background: 'var(--color-neutral-100)', color: 'var(--color-text)', cursor: 'pointer', padding: '13px 18px',
                 fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 12, letterSpacing: '.1em', display: 'flex', justifyContent: 'flex-start',
                 opacity: apps.length === 0 ? 0.5 : 1 }}>
-              {fetchMut.isPending ? 'FETCHING…' : 'FETCH & REQUEST APPROVAL →'}
+              {previewMut.isPending ? 'READING HASH…' : 'FETCH & CHECK HASH →'}
             </button>
           </div>
-        </div>
-      )}
-
-      {result && (
-        <div style={{ borderTop: rule2, paddingTop: 20, marginTop: 24, maxWidth: 1100, overflowX: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-            <span style={{ width: 13, height: 13, background: C.run }} />
-            <h4 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Fetched from staging</h4>
-            <div style={{ fontSize: 12, color: 'var(--color-neutral-500)' }}>hash read from the staged build, shown against what production runs now.</div>
-          </div>
-          <FetchHeader />
-          {result.map((pr) => <FetchRow key={pr.id} pr={pr} />)}
         </div>
       )}
 
@@ -175,6 +228,8 @@ function DeployedFlag({ deployed }: { deployed: boolean }) {
     ? <div style={{ justifySelf: 'start', padding: '2px 8px', background: 'var(--color-neutral-100)', color: 'var(--color-text)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>DEPLOYED</div>
     : <div style={{ justifySelf: 'start', padding: '2px 8px', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>NOT DEPLOYED</div>;
 }
+
+const editBtn: React.CSSProperties = { border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', background: 'transparent', color: 'var(--color-neutral-200)', cursor: 'pointer', padding: '12px 18px', fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 11, letterSpacing: '.1em' };
 
 export function StatusTag({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string }> = {

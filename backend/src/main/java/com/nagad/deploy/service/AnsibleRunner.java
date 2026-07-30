@@ -16,9 +16,13 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Produces the console stream for a run. In demo mode ({@code nagad.ansible.simulate}) it
@@ -28,6 +32,8 @@ import java.util.regex.Pattern;
  */
 @Component
 public class AnsibleRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(AnsibleRunner.class);
 
     /** level: user | dim | ink | task | ok | ch | fatal. rail fields drive the per-host tracker. */
     public record Line(String level, String text, String railHost, String railAction, String railState) {
@@ -277,6 +283,36 @@ public class AnsibleRunner {
 
     /** The working directory the wrapper + inventory live in on the jump host. */
     public String workingDir() { return workingDir; }
+
+    /**
+     * Pull a jar from a staging host with {@code ./fetch.sh} and read its real
+     * {@code git.commit.id.abbrev} out of {@code BOOT-INF/classes/git.properties} — the exact
+     * value {@code hash-check.sh} prints. This is what the FETCH screen shows, so the console's
+     * hash matches the jar on disk. Returns empty if the pull/read fails (the caller then falls
+     * back to a deterministic stand-in). Used only in real (non-simulate) mode.
+     */
+    public Optional<String> stagingGitHash(String srcHost, String app, String jar) {
+        String jarPath = "roles/deployment/files/jars/" + jar;
+        // fetch.sh pulls the jar into files/jars/ (removing the old local copy first), then we
+        // read the embedded git hash from it — never touching production.
+        String remote = "cd " + shq(workingDir) + " && ./fetch.sh " + shq(app) + " " + shq(srcHost)
+                + " >/dev/null 2>&1; unzip -p " + shq(jarPath)
+                + " BOOT-INF/classes/git.properties 2>/dev/null | tr -d '\\r'"
+                + " | sed -n 's/^git\\.commit\\.id\\.abbrev=//p' | head -n1";
+        try {
+            String out = capture(remote, 120);
+            String hash = out == null ? "" : out.trim();
+            if (hash.contains("\n")) {
+                String[] parts = hash.split("\n");
+                hash = parts[parts.length - 1].trim();
+            }
+            return hash.isBlank() ? Optional.empty() : Optional.of(hash);
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("staging git-hash read failed for {} on {}: {}", app, srcHost, e.toString());
+            return Optional.empty();
+        }
+    }
 
     /**
      * Run a command on the jump host over SSH and return its merged stdout/stderr. Used by the

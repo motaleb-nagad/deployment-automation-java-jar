@@ -28,6 +28,12 @@ public class PromotionController {
         return staging.sources();
     }
 
+    /** Read the staging hash(es) for the review step — records nothing. */
+    @PostMapping("/preview")
+    public List<PromotionView> preview(@RequestBody FetchRequest req) {
+        return promotions.preview(current.require(), req);
+    }
+
     @PostMapping("/fetch")
     public List<PromotionView> fetch(@RequestBody FetchRequest req) {
         return promotions.fetch(current.require(), req);
