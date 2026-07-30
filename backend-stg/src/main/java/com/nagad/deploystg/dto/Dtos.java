@@ -22,7 +22,7 @@ public final class Dtos {
      *  name the playbook will look for (jar_map name / {@code <app>-application.properties} /
      *  {@code <ui>.tar}); {@code targetPath} is where it landed under the bundle. */
     public record StgUploadResponse(String kind, String target, String storedName,
-                                    String targetPath, long size) {}
+                                    String targetPath, long size, String sha256) {}
 
     /** Staging jar/config deploy — {@code ./run.sh <group> all <apps> <actions>} on the stg host. */
     public record StgDeployRequest(String group, List<String> apps, List<String> actions) {}

@@ -17,6 +17,15 @@ const APP_PHASES = ['upload', 'stop', 'deploy', 'start'];
 const UI_PHASES = ['upload', 'deploy'];
 const RUN_ACTIONS = new Set(['stop', 'deploy', 'start']);
 
+/** SHA-256 of a file, lower-case hex — computed in the browser so the jar hash can be shown
+ *  in the review before anything is uploaded. Matches the sha256 the backend records on stage. */
+async function sha256File(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const shortHash = (h: string) => (h ? h.slice(0, 12) + '…' + h.slice(-8) : '');
+
 /**
  * The STAGING deployment console (maps to /stg-deployment). Upload-driven: files are selected
  * in the build step and only staged onto the jump host when you EXECUTE — as the first phase —
@@ -40,6 +49,8 @@ export function StgDeployment() {
   const [jarFile, setJarFile] = useState<Record<string, File>>({});
   const [cfgFile, setCfgFile] = useState<Record<string, File>>({});
   const [tarFile, setTarFile] = useState<Record<string, File>>({});
+  // SHA-256 of each chosen file, keyed by `${kind}:${target}` ('' while still hashing).
+  const [fileHash, setFileHash] = useState<Record<string, string>>({});
 
   const [lines, setLines] = useState<TermLine[]>([]);
   const [rail, setRail] = useState<Record<string, Record<string, string>>>({});
@@ -50,6 +61,16 @@ export function StgDeployment() {
   useEffect(() => { if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight; }, [lines]);
 
   const toggle = <T,>(arr: T[], v: T): T[] => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
+
+  // Record a chosen file and compute its SHA-256 in the background so the review can show the hash.
+  function pick(kind: 'jar' | 'cfg' | 'tar', target: string,
+                setter: React.Dispatch<React.SetStateAction<Record<string, File>>>, f: File) {
+    setter((p) => ({ ...p, [target]: f }));
+    setFileHash((p) => ({ ...p, [`${kind}:${target}`]: '' }));
+    sha256File(f)
+      .then((h) => setFileHash((p) => ({ ...p, [`${kind}:${target}`]: h })))
+      .catch(() => setFileHash((p) => ({ ...p, [`${kind}:${target}`]: 'unavailable' })));
+  }
 
   const grp = useMemo(() => cat?.groups.find((g) => g.key === group) ?? cat?.groups[0], [cat, group]);
   const portalHost = cat?.groups.find((g) => g.key === 'portal')?.host ?? 'ngd-dc-portal-01';
@@ -80,13 +101,13 @@ export function StgDeployment() {
 
   function reset() {
     setStep('build'); setApps([]); setActions([...(channel === 'app' ? APP_PHASES : UI_PHASES)]);
-    setUis([]); setDate(''); setJarFile({}); setCfgFile({}); setTarFile({});
+    setUis([]); setDate(''); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({});
     setLines([]); setRail({}); setResult([]); setDone(false);
   }
 
   function switchChannel(c: Channel) {
     setChannel(c); setStep('build'); setActions([...(c === 'app' ? APP_PHASES : UI_PHASES)]);
-    setApps([]); setUis([]); setJarFile({}); setCfgFile({}); setTarFile({});
+    setApps([]); setUis([]); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({});
   }
 
   const appendLine = (level: string, text: string) => setLines((p) => [...p, { level, text }]);
@@ -98,6 +119,7 @@ export function StgDeployment() {
     if (kind !== 'portalui') fields.group = group;
     const res = await uploadFile<StgUploadResponse>('/stg/upload', file, fields);
     appendLine('ch', `staged ${file.name} -> ${res.targetPath}`);
+    if (res.sha256) appendLine('ch', `  sha256 ${res.sha256}`);
     return res;
   }
 
@@ -214,8 +236,8 @@ export function StgDeployment() {
                       return (
                         <div key={a} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr', gap: 12, padding: '10px 2px', borderBottom: rule1, alignItems: 'center' }}>
                           <div style={{ fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)' }}>{a}<div style={{ fontSize: 9.5, color: 'var(--color-neutral-500)' }}>{jar}</div></div>
-                          <FileCell label="jar" required file={jarFile[a]} onPick={(f) => setJarFile((p) => ({ ...p, [a]: f }))} disabled={!me?.w} />
-                          <FileCell label="application.properties" required={false} file={cfgFile[a]} onPick={(f) => setCfgFile((p) => ({ ...p, [a]: f }))} disabled={!me?.w} />
+                          <FileCell label="jar" required file={jarFile[a]} hash={fileHash[`jar:${a}`]} onPick={(f) => pick('jar', a, setJarFile, f)} disabled={!me?.w} />
+                          <FileCell label="application.properties" required={false} file={cfgFile[a]} hash={fileHash[`cfg:${a}`]} onPick={(f) => pick('cfg', a, setCfgFile, f)} disabled={!me?.w} />
                         </div>
                       );
                     })}
@@ -257,7 +279,7 @@ export function StgDeployment() {
                     {uis.map((u) => (
                       <div key={u} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 12, padding: '10px 2px', borderBottom: rule1, alignItems: 'center' }}>
                         <div style={{ fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)' }}>{u}<div style={{ fontSize: 9.5, color: 'var(--color-neutral-500)' }}>{u}.tar</div></div>
-                        <FileCell label="tarball" required file={tarFile[u]} onPick={(f) => setTarFile((p) => ({ ...p, [u]: f }))} disabled={!me?.w} accept=".tar,.gz,.tgz" />
+                        <FileCell label="tarball" required file={tarFile[u]} hash={fileHash[`tar:${u}`]} onPick={(f) => pick('tar', u, setTarFile, f)} disabled={!me?.w} accept=".tar,.gz,.tgz" />
                       </div>
                     ))}
                   </div>
@@ -302,14 +324,15 @@ export function StgDeployment() {
 
   // ---------- CONFIRM ----------
   if (step === 'confirm') {
-    const fileRows: [string, string][] = channel === 'app'
+    type FileRow = { label: string; name: string; hash?: string };
+    const fileRows: FileRow[] = channel === 'app'
       ? apps.flatMap((a) => {
-          const r: [string, string][] = [];
-          if (jarFile[a]) r.push([`${a} · jar`, jarFile[a].name]);
-          if (cfgFile[a]) r.push([`${a} · config`, cfgFile[a].name]);
+          const r: FileRow[] = [];
+          if (jarFile[a]) r.push({ label: `${a} · jar`, name: jarFile[a].name, hash: fileHash[`jar:${a}`] });
+          if (cfgFile[a]) r.push({ label: `${a} · config`, name: cfgFile[a].name, hash: fileHash[`cfg:${a}`] });
           return r;
         })
-      : uis.filter((u) => tarFile[u]).map((u) => [`${u} · tar`, tarFile[u].name] as [string, string]);
+      : uis.filter((u) => tarFile[u]).map((u) => ({ label: `${u} · tar`, name: tarFile[u].name, hash: fileHash[`tar:${u}`] }));
     return (
       <main style={{ padding: '0 24px 48px', maxWidth: 940, margin: '0 auto' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 14px' }}>
@@ -334,13 +357,18 @@ export function StgDeployment() {
           </div>
           {actions.includes('upload') && (
             <div>
-              <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>FILES TO STAGE → {host}</h6>
+              <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>FILES TO STAGE → {host} <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— sha256 computed locally, before upload</span></h6>
               <div style={{ borderTop: rule2 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 12, padding: '6px 2px', borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
+                  <div>FILE</div><div>SHA-256</div>
+                </div>
                 {fileRows.length === 0 && <div style={{ padding: '8px 2px', fontSize: 12, color: C.warn }}>No files chosen.</div>}
-                {fileRows.map(([k, v]) => (
-                  <div key={k} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 12, padding: '9px 2px', borderBottom: rule1, fontFamily: mono, fontSize: 12 }}>
-                    <div style={{ color: 'var(--color-neutral-100)' }}>{k}</div>
-                    <div style={{ color: 'var(--color-neutral-300)' }}>{v}</div>
+                {fileRows.map((fr) => (
+                  <div key={fr.label} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 12, padding: '9px 2px', borderBottom: rule1, fontFamily: mono, fontSize: 12 }}>
+                    <div style={{ color: 'var(--color-neutral-100)' }}>{fr.label}<div style={{ fontSize: 10, color: 'var(--color-neutral-500)' }}>{fr.name}</div></div>
+                    <div style={{ color: 'var(--color-neutral-300)', wordBreak: 'break-all', alignSelf: 'center' }} title={fr.hash && fr.hash !== 'unavailable' ? fr.hash : undefined}>
+                      {fr.hash === undefined || fr.hash === '' ? <span style={{ color: 'var(--color-neutral-500)' }}>computing…</span> : fr.hash === 'unavailable' ? <span style={{ color: C.warn }}>unavailable</span> : fr.hash}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -432,27 +460,35 @@ export function StgDeployment() {
   );
 }
 
-/** A file slot: pick a file (held in the browser, uploaded on EXECUTE). */
-function FileCell({ label, required, file, onPick, disabled, accept }: {
-  label: string; required: boolean; file?: File;
+/** A file slot: pick a file (held in the browser, uploaded on EXECUTE). Once a file is chosen
+ *  its SHA-256 is shown so the hash is visible before anything is uploaded. */
+function FileCell({ label, required, file, hash, onPick, disabled, accept }: {
+  label: string; required: boolean; file?: File; hash?: string;
   onPick: (f: File) => void; disabled: boolean; accept?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   const dot = file ? C.run : 'var(--color-neutral-600)';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <input ref={ref} type="file" accept={accept} style={{ display: 'none' }}
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ''; }} />
-      <button onClick={() => ref.current?.click()} disabled={disabled} style={{
-        border: '1px solid color-mix(in srgb, var(--color-neutral-100) 25%, transparent)', background: 'transparent',
-        color: disabled ? 'var(--color-neutral-600)' : 'var(--color-neutral-200)', cursor: disabled ? 'not-allowed' : 'pointer',
-        padding: '7px 12px', fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.08em', whiteSpace: 'nowrap' }}>
-        {file ? 'CHANGE' : `CHOOSE ${label.toUpperCase()}`}{required && !file ? ' *' : ''}
-      </button>
-      <div style={{ width: 8, height: 8, background: dot, flex: 'none' }} />
-      <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--color-neutral-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {file ? file.name : required ? 'required' : 'optional'}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <input ref={ref} type="file" accept={accept} style={{ display: 'none' }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ''; }} />
+        <button onClick={() => ref.current?.click()} disabled={disabled} style={{
+          border: '1px solid color-mix(in srgb, var(--color-neutral-100) 25%, transparent)', background: 'transparent',
+          color: disabled ? 'var(--color-neutral-600)' : 'var(--color-neutral-200)', cursor: disabled ? 'not-allowed' : 'pointer',
+          padding: '7px 12px', fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.08em', whiteSpace: 'nowrap' }}>
+          {file ? 'CHANGE' : `CHOOSE ${label.toUpperCase()}`}{required && !file ? ' *' : ''}
+        </button>
+        <div style={{ width: 8, height: 8, background: dot, flex: 'none' }} />
+        <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--color-neutral-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {file ? file.name : required ? 'required' : 'optional'}
+        </div>
       </div>
+      {file && (
+        <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--color-neutral-500)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {hash === undefined || hash === '' ? 'sha256 …' : hash === 'unavailable' ? 'sha256 unavailable' : <>sha256 <span style={{ color: 'var(--color-neutral-300)' }}>{shortHash(hash)}</span></>}
+        </div>
+      )}
     </div>
   );
 }

@@ -14,7 +14,8 @@ public class StagingCatalog {
     private final List<Source> sources = List.of(
             new Source("staging-core", "ngd-dc-core-01", "10.230.1.208",
                     List.of("spg", "apigw", "apigw-summary", "map", "dfs", "bkofc", "npsb_recon",
-                            "cms", "cp", "cs", "mps", "tms", "tsp", "rms", "ecs", "drs", "bds", "kod", "knotify")),
+                            "cms", "cp", "cs", "mps", "tms", "tsp", "rms", "ecs", "drs", "bds", "kod", "knotify",
+                            "png", "pp", "npsb_parser")),
             new Source("staging-web", "ngd-dc-portal-01", "10.230.1.207",
                     List.of("dmscore", "syscore", "callcentercore", "accs", "auth",
                             "dmsgw", "sysgw", "callcentergw", "rpgweb")));
@@ -25,7 +26,9 @@ public class StagingCatalog {
             Map.entry("dmsgw", "web-dmz"), Map.entry("sysgw", "web-dmz"),
             Map.entry("callcentergw", "web-dmz"), Map.entry("rpgweb", "web-dmz"),
             Map.entry("dmscore", "web"), Map.entry("syscore", "web"),
-            Map.entry("callcentercore", "web"), Map.entry("accs", "web"), Map.entry("auth", "web"));
+            Map.entry("callcentercore", "web"), Map.entry("accs", "web"), Map.entry("auth", "web"),
+            // NPSB tiers (apigw/spg stay on core; the npsb-only apps route to their own groups).
+            Map.entry("png", "npsb-png"), Map.entry("pp", "npsb-pp"), Map.entry("npsb_parser", "npsb-pp"));
 
     public List<Source> sources() { return sources; }
 
