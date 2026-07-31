@@ -49,12 +49,14 @@ public class DeploymentFinalizer {
     @Transactional
     public List<Map<String, String>> commit(String deploymentId, String actor, String groupCmd,
                                             List<String> hosts, List<String> apps, List<String> actions,
-                                            String cmd, String lastLogLine) {
+                                            String cmd, String lastLogLine, Map<String, String> beforeHashes) {
         List<Map<String, String>> rows = new ArrayList<>();
         boolean isDeploy = actions.contains("deploy");
+        Map<String, String> before0 = beforeHashes == null ? Map.of() : beforeHashes;
 
         for (String app : apps) {
-            String before = prodHash.current(groupCmd, app);
+            // "before" is the pre-run snapshot captured at start(); fall back to a live read.
+            String before = before0.getOrDefault(app, prodHash.current(groupCmd, app));
             String after = before;
             if (isDeploy) {
                 Optional<Promotion> approved = promos
@@ -66,6 +68,9 @@ public class DeploymentFinalizer {
                     registry.findById(new JarRegistry.Key(app, groupCmd)).ifPresentOrElse(
                             r -> r.updateHash(p.getGitHash(), actor),
                             () -> registry.save(new JarRegistry(app, groupCmd, p.getJar(), p.getGitHash(), actor)));
+                } else {
+                    // Deployed without a console fetch — re-read the live jar so "after" is real.
+                    after = prodHash.refreshed(groupCmd, app);
                 }
             }
             for (String h : hosts) {
@@ -92,24 +97,26 @@ public class DeploymentFinalizer {
     public List<Map<String, String>> commitConsolidated(String deploymentId, String actor,
                                                         List<com.nagad.deploy.dto.Dtos.DeployPair> pairs,
                                                         List<String> actions, String cmd, String lastLogLine,
-                                                        java.util.Set<String> skipped) {
+                                                        java.util.Set<String> skipped, Map<String, String> beforeHashes) {
         List<Map<String, String>> rows = new ArrayList<>();
         boolean isDeploy = actions.contains("deploy");
         java.util.Set<String> skip = skipped == null ? java.util.Set.of() : skipped;
+        Map<String, String> before0 = beforeHashes == null ? Map.of() : beforeHashes;
         int skippedCount = 0;
 
         for (var p : pairs) {
             String host = p.host(), app = p.app();
             // Service not installed on this host — skipped by the run, not deployed.
             if (skip.contains(host + ":" + app)) {
-                String prod = prodHash.current(inv.groupForHost(host).map(FleetInventory.Group::cmd).orElse("consolidated"), app);
+                String prod = before0.getOrDefault(host + ":" + app,
+                        prodHash.current(inv.groupForHost(host).map(FleetInventory.Group::cmd).orElse("consolidated"), app));
                 rows.add(Map.of("host", host, "app", app, "before", prod, "after", prod, "verdict", "skipped"));
                 skippedCount++;
                 continue;
             }
             FleetInventory.Group g = inv.groupForHost(host).orElse(null);
             String group = g != null ? g.cmd() : "consolidated";
-            String before = prodHash.current(group, app);
+            String before = before0.getOrDefault(host + ":" + app, prodHash.current(group, app));
             String after = before;
             if (isDeploy && g != null) {
                 Optional<Promotion> approved = promos
@@ -122,6 +129,8 @@ public class DeploymentFinalizer {
                     registry.findById(new JarRegistry.Key(app, group)).ifPresentOrElse(
                             r -> r.updateHash(pr.getGitHash(), actor),
                             () -> registry.save(new JarRegistry(app, g2, pr.getJar(), pr.getGitHash(), actor)));
+                } else {
+                    after = prodHash.refreshed(group, app);
                 }
             }
             rows.add(Map.of("host", host, "app", app, "before", before, "after", after,

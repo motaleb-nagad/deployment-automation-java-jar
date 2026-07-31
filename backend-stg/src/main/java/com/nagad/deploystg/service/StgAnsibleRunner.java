@@ -266,6 +266,7 @@ public class StgAnsibleRunner {
                 "-p", Integer.toString(sshPort),
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
+                "-o", "LogLevel=ERROR",
                 "-o", "StrictHostKeyChecking=" + (strictHostKey ? "yes" : "no")));
         if (!strictHostKey) { argv.add("-o"); argv.add("UserKnownHostsFile=/dev/null"); }
         argv.add(sshUser + "@" + sshHost);

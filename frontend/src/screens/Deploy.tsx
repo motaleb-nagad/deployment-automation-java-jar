@@ -532,8 +532,25 @@ const linkBtn: React.CSSProperties = { border: 0, background: 'transparent', col
  * hash-check.sh shows), each compared to what production currently runs. Fed by
  * GET /api/deploy/staged-jars. Backups (.jar.bkp.*) are shown indented under their live jar.
  */
-const STAGED_COLS = '1.6fr 120px 1fr 130px 150px';
+const STAGED_COLS = '1.5fr 110px 1fr 120px 140px 80px';
 function StagedJars({ rows }: { rows?: StagedJarView[] }) {
+  const { me, flash } = useApp();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState('');
+
+  async function remove(jar: string) {
+    if (!confirm(`Remove staged jar ${jar} from files/jars/?`)) return;
+    setBusy(jar);
+    try {
+      await api.del(`/deploy/staged-jars/${encodeURIComponent(jar)}`);
+      flash(`Removed staged jar ${jar}`);
+      qc.invalidateQueries({ queryKey: ['deploy', 'staged-jars'] });
+      qc.invalidateQueries({ queryKey: ['promotions'] });
+    } catch (e) {
+      flash(e instanceof ApiError ? e.message : 'remove failed', C.stop);
+    } finally { setBusy(''); }
+  }
+
   return (
     <section style={{ marginTop: 30, overflowX: 'auto' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -541,7 +558,7 @@ function StagedJars({ rows }: { rows?: StagedJarView[] }) {
         <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)' }}>git commit hash read from each jar in <span style={{ fontFamily: mono }}>files/jars/</span> (as <span style={{ fontFamily: mono }}>hash-check.sh</span>), vs what production runs now.</div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: STAGED_COLS, gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
-        <div>JAR FILE</div><div>HASH</div><div>BRANCH · DATE</div><div>PROD HASH</div><div>STATE</div>
+        <div>JAR FILE</div><div>HASH</div><div>BRANCH · DATE</div><div>PROD HASH</div><div>STATE</div><div />
       </div>
       {(!rows || rows.length === 0) && (
         <div style={{ padding: '10px 8px', fontSize: 12, color: 'var(--color-neutral-500)' }}>No jars staged in files/jars/ yet — fetch a build from staging first.</div>
@@ -560,6 +577,14 @@ function StagedJars({ rows }: { rows?: StagedJarView[] }) {
               : !r.prodHash ? <Tag label="STAGED" bg="transparent" fg="var(--color-neutral-400)" border />
               : r.matchesProd ? <Tag label="LIVE IN PROD" bg={C.run} fg={C.inkOnGreen} />
               : <Tag label="NEW — NOT DEPLOYED" bg={C.warn} fg={C.inkOnAmber} />}
+          </div>
+          <div>
+            {me?.w && (
+              <button onClick={() => remove(r.jar)} disabled={busy === r.jar} title={`Remove ${r.jar}`}
+                style={{ border: '1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)', background: 'transparent', color: 'var(--color-accent-400)', cursor: busy === r.jar ? 'default' : 'pointer', padding: '3px 8px', fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 9, letterSpacing: '.1em', opacity: busy === r.jar ? 0.5 : 1 }}>
+                {busy === r.jar ? '…' : 'REMOVE'}
+              </button>
+            )}
           </div>
         </div>
       ))}

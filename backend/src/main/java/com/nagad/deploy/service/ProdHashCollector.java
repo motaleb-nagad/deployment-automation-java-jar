@@ -55,6 +55,12 @@ public class ProdHashCollector {
         this.timeoutSeconds = timeoutSeconds;
     }
 
+    /** Drop the cached snapshot for a group so the next read re-runs check-hash (used right
+     *  after a deploy so the "after" hash reflects the jar that was just installed). */
+    public void invalidate(String cmdGroup) {
+        if (cmdGroup != null) cache.remove(cmdGroup);
+    }
+
     /** The live prod hash for an app in a wrapper group, or empty if it can't be read. */
     public Optional<String> hashFor(String cmdGroup, String app) {
         if (cmdGroup == null || !INV_GROUP.containsKey(cmdGroup)) return Optional.empty();
