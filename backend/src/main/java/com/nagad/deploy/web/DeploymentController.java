@@ -27,6 +27,12 @@ public class DeploymentController {
         return deployments.deployGroups();
     }
 
+    /** Jars staged in files/jars/ (ready to deploy) with their git hash, vs what prod runs. */
+    @GetMapping("/deploy/staged-jars")
+    public List<StagedJarView> stagedJars() {
+        return deployments.stagedJars();
+    }
+
     /** Validate and register a run; returns the id to stream. */
     @PostMapping("/deploy")
     public DeployStartedResponse start(@RequestBody DeployRequest req) {

@@ -69,6 +69,13 @@ public final class Dtos {
     public record DeployGroupView(String key, String cmd, String zone, String tier,
                                   List<String> hosts, List<DeployAppView> apps) {}
 
+    /** A jar staged in {@code roles/deployment/files/jars/} — ready to deploy — with the git
+     *  commit info read from it (as {@code hash-check.sh} shows). {@code backup} marks a
+     *  {@code .jar.bkp.*} rollback copy; {@code matchesProd} is true when this hash is what
+     *  production currently runs for the app. */
+    public record StagedJarView(String jar, String app, String hash, String branch,
+                                String commitDate, boolean backup, String prodHash, boolean matchesProd) {}
+
     public record DeploymentView(String id, String promotionId, String group, String hosts,
                                  String apps, String actions, String startedBy, String startedAt,
                                  String duration, String result, String beforeAfter, String logExcerpt) {}
