@@ -40,8 +40,9 @@ public class ProdHashCollector {
             "npsb-apigw", "nagad-npsb-apigw", "npsb-spg", "nagad-npsb-spg",
             "npsb-pp", "nagad-npsb-pp", "npsb-png", "nagad-npsb-png");
 
-    // "nagad-app1 --> spg ---> 0fefb71"
-    private static final Pattern LINE = Pattern.compile("[\\w.-]+ --> (\\S+)\\s*--->\\s*(\\S+)");
+    // "nagad-app1 --> spg ---> 0fefb71" — the hash is captured hex-only so the trailing
+    // quote/comma Ansible wraps each debug list element in ("...spg ---> 0fefb71",) is dropped.
+    private static final Pattern LINE = Pattern.compile("-->\\s*(\\S+?)\\s*--->\\s*([0-9a-fA-F]+)");
 
     private record Snap(Instant at, Map<String, String> appHash) {}
     private final Map<String, Snap> cache = new ConcurrentHashMap<>();
