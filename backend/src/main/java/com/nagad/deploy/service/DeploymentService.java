@@ -443,7 +443,7 @@ public class DeploymentService {
                 String jar = f[0].trim();
                 String hash = f[1].trim();
                 String branch = f[2].trim();
-                String commitDate = f[3].trim();
+                String commitDate = formatCommitTime(f[3].trim());
                 boolean backup = "1".equals(f[4].trim());
                 String app = appForJar(jar);
                 String prod = app == null ? "" : prodHash.current(groupForApp(app), app);
@@ -455,6 +455,24 @@ public class DeploymentService {
             log.warn("staged jar read failed: {}", e.toString());
         }
         return out;
+    }
+
+    private static final java.time.format.DateTimeFormatter COMMIT_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(java.time.ZoneOffset.UTC);
+
+    /** git.commit.time may be epoch seconds, epoch millis, or already a date string; normalise
+     *  epochs to a readable UTC timestamp and pass anything else through unchanged. */
+    private static String formatCommitTime(String raw) {
+        if (raw == null || raw.isBlank()) return "-";
+        String t = raw.trim();
+        if (t.matches("\\d{10,13}")) {
+            try {
+                long v = Long.parseLong(t);
+                long epochSec = t.length() >= 13 ? v / 1000 : v;
+                return COMMIT_FMT.format(java.time.Instant.ofEpochSecond(epochSec));
+            } catch (NumberFormatException ignored) { /* fall through */ }
+        }
+        return t;
     }
 
     /** First app key whose jar_map entry matches this jar file (jars are shared by some apps). */
