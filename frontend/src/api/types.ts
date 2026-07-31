@@ -38,6 +38,11 @@ export interface DeployGroup {
   key: string; cmd: string; zone: string; tier: string; hosts: string[]; apps: DeployApp[];
 }
 
+export interface StagedJarView {
+  jar: string; app: string; hash: string; branch: string; commitDate: string;
+  backup: boolean; prodHash: string; matchesProd: boolean;
+}
+
 export interface DeployPair { host: string; app: string; }
 
 export interface PortalUiHost { host: string; ip: string; }

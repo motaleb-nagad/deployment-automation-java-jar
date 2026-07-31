@@ -336,6 +336,29 @@ public class AnsibleRunner {
         return out.toString();
     }
 
+    /**
+     * List the jars staged in {@code roles/deployment/files/jars/} (live + {@code .jar.bkp.*}
+     * rollback copies) and read the git commit info embedded in each — the same data
+     * {@code hash-check.sh} prints, but as parseable TSV:
+     * {@code <name>\t<hash>\t<branch>\t<commitTime>\t<0|1 backup>}.
+     */
+    public String readStagedJars() throws IOException, InterruptedException {
+        String dir = workingDir + "/roles/deployment/files/jars";
+        String script =
+                "cd " + shq(dir) + " 2>/dev/null || exit 0; "
+                + "shopt -s nullglob; "
+                + "for f in *.jar *.jar.bkp*; do "
+                + "  [ -e \"$f\" ] || continue; "
+                + "  p=$(unzip -p \"$f\" BOOT-INF/classes/git.properties 2>/dev/null | tr -d '\\r'); "
+                + "  h=$(printf '%s\\n' \"$p\" | sed -n 's/^git.commit.id.abbrev=//p' | head -1); "
+                + "  b=$(printf '%s\\n' \"$p\" | sed -n 's/^git.branch=//p' | head -1); "
+                + "  t=$(printf '%s\\n' \"$p\" | sed -n 's/^git.commit.time=//p' | head -1 | sed 's/\\\\:/:/g'); "
+                + "  case \"$f\" in *.jar.bkp*) bk=1;; *) bk=0;; esac; "
+                + "  printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$f\" \"$h\" \"$b\" \"$t\" \"$bk\"; "
+                + "done";
+        return capture(script, 60);
+    }
+
     private List<String> sshArgv(String remoteCommand) throws IOException {
         List<String> argv = new ArrayList<>(List.of(
                 "ssh", "-i", keyFile().toString(),

@@ -408,6 +408,68 @@ public class DeploymentService {
         return out;
     }
 
+    /**
+     * The jars staged in {@code roles/deployment/files/jars/} — ready to deploy — with the git
+     * commit info read from each (what {@code hash-check.sh} shows). In real mode this reads the
+     * ops host; in demo it is derived from the jars fetched into the registry. Each row is shown
+     * against what production currently runs so drift is obvious before a deploy.
+     */
+    @Transactional(readOnly = true)
+    public List<StagedJarView> stagedJars() {
+        return simulate ? demoStagedJars() : realStagedJars();
+    }
+
+    private List<StagedJarView> demoStagedJars() {
+        List<StagedJarView> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (com.nagad.deploy.domain.Promotion p : promos.findAllByOrderByRequestedAtDesc()) {
+            if (!seen.add(p.getJar() + "|" + p.getGitHash())) continue; // one row per jar+hash
+            String prod = prodHash.current(p.getGroupName(), p.getApp());
+            out.add(new StagedJarView(p.getJar(), p.getApp(), p.getGitHash(),
+                    p.getBranch() == null ? "-" : p.getBranch(),
+                    PromotionService.fmt(p.getRequestedAt()), false, prod, p.getGitHash().equals(prod)));
+        }
+        return out;
+    }
+
+    private List<StagedJarView> realStagedJars() {
+        List<StagedJarView> out = new ArrayList<>();
+        try {
+            String raw = runner.readStagedJars();
+            for (String line : raw.split("\n")) {
+                if (line.isBlank()) continue;
+                String[] f = line.split("\t", -1);
+                if (f.length < 5) continue;
+                String jar = f[0].trim();
+                String hash = f[1].trim();
+                String branch = f[2].trim();
+                String commitDate = f[3].trim();
+                boolean backup = "1".equals(f[4].trim());
+                String app = appForJar(jar);
+                String prod = app == null ? "" : prodHash.current(groupForApp(app), app);
+                out.add(new StagedJarView(jar, app == null ? "-" : app, hash.isBlank() ? "N/A" : hash,
+                        branch.isBlank() ? "-" : branch, commitDate.isBlank() ? "-" : commitDate,
+                        backup, prod, !prod.isBlank() && prod.equals(hash)));
+            }
+        } catch (Exception e) {
+            log.warn("staged jar read failed: {}", e.toString());
+        }
+        return out;
+    }
+
+    /** First app key whose jar_map entry matches this jar file (jars are shared by some apps). */
+    private static String appForJar(String jar) {
+        return FleetInventory.JAR_MAP.entrySet().stream()
+                .filter(en -> en.getValue().equals(jar)).map(Map.Entry::getKey).findFirst().orElse(null);
+    }
+
+    /** The wrapper group an app belongs to (for the prod-hash lookup). */
+    private String groupForApp(String app) {
+        return inv.managedGroups().stream()
+                .filter(g -> g.svcs().stream().anyMatch(s -> s.key().equals(app)))
+                .map(Group::cmd).findFirst().orElse("core");
+    }
+
     @Transactional(readOnly = true)
     public List<DeploymentView> history() {
         return deployments.findAllByOrderByStartedAtDesc().stream().map(d -> new DeploymentView(

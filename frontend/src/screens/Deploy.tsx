@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, openDeployStream, type ResultRow } from '../api/client';
 import { useApp } from '../store/app';
 import { C, rule1, rule2, TERM } from '../theme/colors';
-import type { DeployGroup, DeployPair, ConsolidatedPairView } from '../api/types';
+import type { DeployGroup, DeployPair, ConsolidatedPairView, StagedJarView } from '../api/types';
 import { PortalUi } from './PortalUi';
 
 const mono = 'var(--mono)';
@@ -19,6 +19,7 @@ export function Deploy() {
   const { me, flash } = useApp();
   const qc = useQueryClient();
   const { data: groups } = useQuery({ queryKey: ['deploy', 'groups'], queryFn: () => api.get<DeployGroup[]>('/deploy/groups') });
+  const { data: staged } = useQuery({ queryKey: ['deploy', 'staged-jars'], queryFn: () => api.get<StagedJarView[]>('/deploy/staged-jars') });
 
   const [mode, setMode] = useState<Mode>('group');
   const [step, setStep] = useState<Step>('build');
@@ -175,6 +176,8 @@ export function Deploy() {
       ) : (
         <ConsolidatedBuild {...{ scopedGroups, cGroup, pickCGroup, cHosts, setCHosts, cApps, setCApps, effectivePairs, removePair, clearPairs, actions, setActions, consolidatedCmd, distinctPairHosts, canReview, me, toggle, goConfirm }} />
       )}
+
+      <StagedJars rows={staged} />
     </main>
   );
 
@@ -523,3 +526,49 @@ const reviewBtn = (enabled: boolean): React.CSSProperties => ({ border: 0, backg
   fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 12, letterSpacing: '.1em', display: 'flex', justifyContent: 'flex-start', opacity: enabled ? 1 : 0.5 });
 
 const linkBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--color-accent-400)', cursor: 'pointer', fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.1em', padding: 0 };
+
+/**
+ * READY TO DEPLOY — the jars staged in files/jars/ with their git commit hash (what
+ * hash-check.sh shows), each compared to what production currently runs. Fed by
+ * GET /api/deploy/staged-jars. Backups (.jar.bkp.*) are shown indented under their live jar.
+ */
+const STAGED_COLS = '1.6fr 120px 1fr 130px 150px';
+function StagedJars({ rows }: { rows?: StagedJarView[] }) {
+  return (
+    <section style={{ marginTop: 30, overflowX: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
+        <h6 style={{ color: 'var(--color-neutral-400)', margin: 0 }}>READY TO DEPLOY — STAGED JAR HASHES</h6>
+        <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)' }}>git commit hash read from each jar in <span style={{ fontFamily: mono }}>files/jars/</span> (as <span style={{ fontFamily: mono }}>hash-check.sh</span>), vs what production runs now.</div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: STAGED_COLS, gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
+        <div>JAR FILE</div><div>HASH</div><div>BRANCH · DATE</div><div>PROD HASH</div><div>STATE</div>
+      </div>
+      {(!rows || rows.length === 0) && (
+        <div style={{ padding: '10px 8px', fontSize: 12, color: 'var(--color-neutral-500)' }}>No jars staged in files/jars/ yet — fetch a build from staging first.</div>
+      )}
+      {rows?.map((r, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: STAGED_COLS, gap: 12, padding: '10px 8px', borderBottom: rule1, alignItems: 'center', fontFamily: mono, fontSize: 11.5 }}>
+          <div style={{ color: r.backup ? 'var(--color-neutral-500)' : 'var(--color-neutral-100)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {r.backup ? <span style={{ color: 'var(--color-neutral-600)' }}>↳ </span> : null}{r.jar}
+            {!r.backup && r.app !== '-' && <span style={{ color: 'var(--color-neutral-500)' }}> · {r.app}</span>}
+          </div>
+          <div style={{ color: r.backup ? '#a16207' : '#22c55e', fontWeight: 700 }}>{r.hash}</div>
+          <div style={{ color: 'var(--color-neutral-400)' }}>{r.branch}{r.commitDate && r.commitDate !== '-' ? ` · ${r.commitDate}` : ''}</div>
+          <div style={{ color: 'var(--color-neutral-400)' }}>{r.prodHash || '—'}</div>
+          <div>
+            {r.backup ? <Tag label="BACKUP" bg="transparent" fg="var(--color-neutral-500)" border />
+              : !r.prodHash ? <Tag label="STAGED" bg="transparent" fg="var(--color-neutral-400)" border />
+              : r.matchesProd ? <Tag label="LIVE IN PROD" bg={C.run} fg={C.inkOnGreen} />
+              : <Tag label="NEW — NOT DEPLOYED" bg={C.warn} fg={C.inkOnAmber} />}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function Tag({ label, bg, fg, border }: { label: string; bg: string; fg: string; border?: boolean }) {
+  return <span style={{ justifySelf: 'start', padding: '2px 8px', background: bg, color: fg,
+    border: border ? '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)' : 'none',
+    fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>{label}</span>;
+}
