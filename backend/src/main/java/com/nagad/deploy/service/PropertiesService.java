@@ -64,25 +64,41 @@ public class PropertiesService {
      * config is an execute-class action, exactly like a deploy.
      */
     public PropertiesResult apply(AppUser actor, PropertiesRequest req) {
-        String host = req.host() == null ? "" : req.host().trim();
         String app = req.app() == null ? "" : req.app().trim();
         String op = req.op() == null ? "" : req.op().trim();
+        List<String> hosts = new ArrayList<>();
+        if (req.hosts() != null) {
+            for (String h : req.hosts()) {
+                String t = h == null ? "" : h.trim();
+                if (!t.isEmpty() && !hosts.contains(t)) hosts.add(t);
+            }
+        }
 
         if (!PropertiesRunner.OPS.contains(op)) {
             throw new ResponseStatusException(BAD_REQUEST, "unknown operation " + op);
         }
-        if (!TOKEN.matcher(host).matches() || !TOKEN.matcher(app).matches()) {
-            throw new ResponseStatusException(BAD_REQUEST, "invalid host or app");
+        if (hosts.isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "select at least one host");
         }
-        Group hg = inv.groupForHost(host).orElseThrow(() ->
-                new ResponseStatusException(BAD_REQUEST, "unknown host " + host));
-        boolean appOnHost = hg.svcs().stream().anyMatch(s -> s.key().equals(app));
-        if (!appOnHost) {
-            throw new ResponseStatusException(BAD_REQUEST, "app " + app + " is not on host " + host);
+        if (!TOKEN.matcher(app).matches()) {
+            throw new ResponseStatusException(BAD_REQUEST, "invalid app");
+        }
+        // Resolve the group from the first host; every host must be in that same group and the
+        // group must run this app (one service across one or more of its hosts).
+        Group hg = inv.groupForHost(hosts.get(0)).orElseThrow(() ->
+                new ResponseStatusException(BAD_REQUEST, "unknown host " + hosts.get(0)));
+        if (hg.svcs().stream().noneMatch(s -> s.key().equals(app))) {
+            throw new ResponseStatusException(BAD_REQUEST, "app " + app + " is not in group " + hg.cmd());
+        }
+        java.util.Set<String> groupHosts = hg.hosts().stream()
+                .map(FleetInventory.Host::name).collect(java.util.stream.Collectors.toSet());
+        for (String h : hosts) {
+            if (!TOKEN.matcher(h).matches() || !groupHosts.contains(h)) {
+                throw new ResponseStatusException(BAD_REQUEST, "host " + h + " is not in group " + hg.cmd());
+            }
         }
         if (!actor.canAccessGroup(hg.cmd())) {
-            throw new ResponseStatusException(FORBIDDEN,
-                    "you are not scoped to group " + hg.cmd() + " (host " + host + ")");
+            throw new ResponseStatusException(FORBIDDEN, "you are not scoped to group " + hg.cmd());
         }
 
         boolean write = PropertiesRunner.WRITE_OPS.contains(op);
@@ -98,11 +114,11 @@ public class PropertiesService {
 
         validateArgs(op, req);
 
-        // Re-pack the request with the trimmed identity so the runner sees clean values.
-        PropertiesRequest r = new PropertiesRequest(host, app, op, test,
+        // Re-pack the request with the cleaned host list so the runner sees clean values.
+        PropertiesRequest r = new PropertiesRequest(hosts, app, op, test,
                 req.oldLine(), req.newLine(), req.key(), req.values(), req.oldKey(), req.newKey(),
                 req.afterLine(), req.block());
-        String blockPath = runner.blockFilePath(host, app);
+        String blockPath = runner.blockFilePath(app);
         boolean changed = write && !test;
 
         List<PropTermLine> lines;
@@ -110,17 +126,18 @@ public class PropertiesService {
             lines = simulate ? runner.script(r, blockPath, changed) : runner.execute(r);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            log.warn("properties {} {}:{} failed: {}", op, host, app, e.toString());
+            log.warn("properties {} {}:{} failed: {}", op, hosts, app, e.toString());
             throw new ResponseStatusException(BAD_GATEWAY, "properties run failed on jump host: " + e.getMessage());
         }
 
         String savedBlock = PropertiesRunner.BLOCK_OPS.contains(op) ? blockPath : null;
+        String cmd = runner.command(String.join(",", hosts), r, blockPath);
         // No surrounding business transaction (the run itself must not hold one, especially a
         // real SSH run) — use the standalone audit write.
-        audit.recordSelf(actor.getUsername(), "properties-" + op, host + ":" + app,
-                (test ? "TEST " : "") + runner.command(r, blockPath));
+        audit.recordSelf(actor.getUsername(), "properties-" + op, String.join(",", hosts) + ":" + app,
+                (test ? "TEST " : "") + cmd);
 
-        return new PropertiesResult(runner.command(r, blockPath), PropertiesRunner.cfgFile(app),
+        return new PropertiesResult(cmd, PropertiesRunner.cfgFile(app),
                 PropertiesRunner.backupFile(app), test, changed, savedBlock, lines);
     }
 

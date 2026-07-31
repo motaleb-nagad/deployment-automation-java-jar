@@ -21,4 +21,11 @@ public class AuditService {
     public void record(String actor, String verb, String target, String detail) {
         repo.save(new AuditLog(actor, verb, target, detail));
     }
+
+    /** Standalone audit write for actions with no surrounding business transaction (e.g. a
+     *  synchronous properties edit). Runs in its own transaction. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordSelf(String actor, String verb, String target, String detail) {
+        repo.save(new AuditLog(actor, verb, target, detail));
+    }
 }

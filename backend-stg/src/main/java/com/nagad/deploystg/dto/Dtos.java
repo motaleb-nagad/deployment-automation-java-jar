@@ -38,4 +38,27 @@ public final class Dtos {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record MeResponse(String username, String role, boolean r, boolean w, boolean x,
                              boolean mustChangePassword) {}
+
+    // ---- staging application-properties (surgical in-place editing on the staging host) ----
+    public record StgPropAppView(String key, String jar, String cfgFile) {}
+
+    public record StgPropGroupView(String key, String label, String host, String ip,
+                                   List<StgPropAppView> apps) {}
+
+    public record StgPropertiesCatalog(List<StgPropGroupView> groups, List<String> ops,
+                                       List<String> blockOps, String cfgPathTemplate) {}
+
+    public record StgPropertiesRequest(String group, String app, String op, boolean testMode,
+                                       String oldLine, String newLine, String key, String values,
+                                       String oldKey, String newKey, String afterLine, String block) {}
+
+    public record StgPropTermLine(String level, String text) {}
+
+    public record StgPropertiesResult(String command, String host, String targetFile, String backupFile,
+                                      boolean testMode, boolean changed, String savedBlockPath,
+                                      List<StgPropTermLine> lines) {}
+
+    // ---- staging history (what was done in staging) ----
+    public record StgHistoryRow(String id, String group, String host, String apps, String actions,
+                                String startedBy, String startedAt, String duration, String result) {}
 }

@@ -135,7 +135,7 @@ public final class Dtos {
 
     /** A properties edit request. {@code op} selects which of the op-specific fields apply.
      *  {@code block} is the pasted text for append/insert (staged to a file on the server). */
-    public record PropertiesRequest(String host, String app, String op, boolean testMode,
+    public record PropertiesRequest(List<String> hosts, String app, String op, boolean testMode,
                                     String oldLine, String newLine, String key, String values,
                                     String oldKey, String newKey, String afterLine, String block) {}
 

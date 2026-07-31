@@ -16,9 +16,11 @@ import java.util.List;
 /**
  * Produces the console stream for a properties edit, mirroring {@code properties.sh} /
  * {@code properties.yml} (surgical in-place editing of {@code application.properties}).
- * In demo mode ({@code nagad.ansible.simulate}) it scripts the wrapper's output line by line;
- * in production it SSHes to the jump host — staging any pasted block into a file first
- * (removing a previous one, then creating it fresh) — and runs the real wrapper.
+ * One service (app), one operation — but across <em>one or more hosts</em> (e.g. app1..app6):
+ * the op runs on each selected host. In demo mode ({@code nagad.ansible.simulate}) it scripts
+ * the wrapper's output per host; in production it SSHes to the jump host — staging any pasted
+ * block into a file first (removing a previous one, then creating it fresh) — and runs the real
+ * wrapper once per host.
  */
 @Component
 public class PropertiesRunner {
@@ -48,9 +50,10 @@ public class PropertiesRunner {
 
     public static String backupFile(String app) { return cfgFile(app) + ".bkp.ansible"; }
 
-    /** Stable per-host:app path a pasted block is staged to (removed + recreated each run). */
-    public String blockFilePath(String host, String app) {
-        return "/tmp/props-block-" + host + "-" + app + ".txt";
+    /** Stable per-app path a pasted block is staged to (removed + recreated each run, shared
+     *  across the selected hosts within one request). */
+    public String blockFilePath(String app) {
+        return "/tmp/props-block-" + app + ".txt";
     }
 
     /** The pasted block split into lines (a trailing blank line is dropped). */
@@ -62,10 +65,15 @@ public class PropertiesRunner {
         return out;
     }
 
-    /** The wrapper command line, exactly as it would be typed (for display + the audit trail). */
-    public String command(PropertiesRequest r, String blockPath) {
+    private static String hostExpr(List<String> hosts) {
+        return String.join(",", hosts);
+    }
+
+    /** The wrapper command line, exactly as it would be typed for one host (args identical
+     *  across hosts). {@code hostToken} is a single host, or the comma list for display. */
+    public String command(String hostToken, PropertiesRequest r, String blockPath) {
         StringBuilder sb = new StringBuilder("./properties.sh ")
-                .append(r.host()).append(' ').append(r.app()).append(' ').append(r.op());
+                .append(hostToken).append(' ').append(r.app()).append(' ').append(r.op());
         switch (r.op()) {
             case "preview" -> { if (notBlank(r.key())) sb.append(' ').append(dq(r.key())); }
             case "update" -> sb.append(' ').append(dq(r.oldLine())).append(' ').append(dq(r.newLine()));
@@ -82,27 +90,54 @@ public class PropertiesRunner {
     // ---- demo mode (scripted output) --------------------------------------------------------
 
     public List<PropTermLine> script(PropertiesRequest r, String blockPath, boolean changed) {
-        String host = r.host(), app = r.app(), op = r.op();
+        String app = r.app(), op = r.op();
         boolean test = r.testMode();
         String file = cfgFile(app);
+        List<String> hosts = r.hosts();
         List<PropTermLine> out = new ArrayList<>();
 
-        out.add(line("user", "$ " + command(r, blockPath)));
+        out.add(line("user", "$ " + command(hostExpr(hosts), r, blockPath)
+                + (hosts.size() > 1 ? "   # run per host" : "")));
         out.add(line("dim", "============================================"));
         out.add(line(test ? "task" : "ink", test ? " PROPERTIES EDIT — TEST MODE (real file NOT modified)" : " PROPERTIES EDIT"));
-        out.add(line("dim", " Host     : nagad-" + host));
+        out.add(line("dim", " Hosts    : " + hosts.stream().map(h -> "nagad-" + h).toList()));
         out.add(line("dim", " App      : " + app));
         out.add(line("dim", " Operation: " + op));
         out.add(line("dim", " File     : " + file));
         if (test) out.add(line("dim", " Test file: " + file + ".test.ansible"));
         out.add(line("dim", "============================================"));
 
+        List<String> block = blockLines(r.block());
+        String stamp = STAMP.format(LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant());
+
+        // Block is staged once on the ops host, then reused for every target host.
+        if (BLOCK_OPS.contains(op)) {
+            out.add(line("task", stars("TASK [stage pasted block on server]")));
+            out.add(line("ch", "staged " + block.size() + " line(s) → " + blockPath
+                    + " (removed previous, created fresh)"));
+        }
+
+        for (String host : hosts) {
+            perHost(out, host, r, changed, block, stamp);
+        }
+
+        out.add(line("ink", stars("PLAY RECAP")));
+        for (String host : hosts) {
+            out.add(line("ok", pad("nagad-" + host) + ": ok=2  changed=" + (changed ? 1 : 0) + "  unreachable=0  failed=0"));
+        }
+        if (test) out.add(line("task", "TEST MODE — real file was NOT modified. Review the diff, then re-run without --test."));
+        out.add(line("dim", "Report emailed to devops-team@nagad.com.bd"));
+        return out;
+    }
+
+    private void perHost(List<PropTermLine> out, String host, PropertiesRequest r,
+                         boolean changed, List<String> block, String stamp) {
+        String app = r.app(), op = r.op();
+        boolean test = r.testMode();
+        String file = cfgFile(app);
         out.add(line("ink", stars("PLAY [properties — " + host + "]")));
         out.add(line("task", stars("TASK [GUARD — app / op / file exist]")));
         out.add(line("ok", "ok: [nagad-" + host + "]"));
-
-        List<String> block = blockLines(r.block());
-        String stamp = STAMP.format(LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant());
 
         switch (op) {
             case "preview" -> scriptPreview(out, host, app, r.key());
@@ -136,7 +171,6 @@ public class PropertiesRunner {
                 diffBlock(out, List.of(r.oldKey() + "=" + val), List.of(r.newKey() + "=" + val));
             }
             case "append" -> {
-                stageBlock(out, host, app, blockPath, block);
                 backup(out, host, app, test);
                 out.add(line("task", stars("TASK [append — add block at end (date header)]")));
                 out.add(line("ch", "changed: [nagad-" + host + "] => " + (block.size() + 1) + " line(s) appended"));
@@ -147,7 +181,6 @@ public class PropertiesRunner {
                 diffBlock(out, List.of(), added);
             }
             case "insert" -> {
-                stageBlock(out, host, app, blockPath, block);
                 backup(out, host, app, test);
                 out.add(line("task", stars("TASK [insert — add block after matched line]")));
                 out.add(line("ch", "changed: [nagad-" + host + "] => " + block.size() + " line(s) inserted"));
@@ -170,12 +203,6 @@ public class PropertiesRunner {
             }
             default -> { /* validated upstream */ }
         }
-
-        out.add(line("ink", stars("PLAY RECAP")));
-        out.add(line("ok", pad("nagad-" + host) + ": ok=2  changed=" + (changed ? 1 : 0) + "  unreachable=0  failed=0"));
-        if (test) out.add(line("task", "TEST MODE — real file was NOT modified. Review the diff, then re-run without --test."));
-        out.add(line("dim", "Report emailed to devops-team@nagad.com.bd"));
-        return out;
     }
 
     private void scriptPreview(List<PropTermLine> out, String host, String app, String key) {
@@ -186,9 +213,9 @@ public class PropertiesRunner {
                 if (inv.h32(app + key + i) % 3 == 0) continue;
                 any = true;
                 int ln = 40 + (int) (inv.h32(app + key + i) % 90);
-                out.add(line("ink", "  " + ln + ": " + key + (i == 0 ? "" : "." + i) + "=" + (inv.h32(app + key + i) % 500)));
+                out.add(line("ink", "  [" + host + "] " + ln + ": " + key + (i == 0 ? "" : "." + i) + "=" + (inv.h32(app + key + i) % 500)));
             }
-            if (!any) out.add(line("dim", "  (no line matched \"" + key + "\")"));
+            if (!any) out.add(line("dim", "  [" + host + "] (no line matched \"" + key + "\")"));
         } else {
             out.add(line("task", stars("TASK [preview — full file with line numbers]")));
             String[] sample = {
@@ -198,15 +225,9 @@ public class PropertiesRunner {
                     "http.client.pool.socket-timeout=" + (300000 + inv.h32(app + "t") % 200000),
                     "logging.level.root=INFO",
             };
-            for (int i = 0; i < sample.length; i++) out.add(line("ink", "  " + (i + 1) + ": " + sample[i]));
-            out.add(line("dim", "  … (" + (60 + inv.h32(app) % 120) + " lines total)"));
+            for (int i = 0; i < sample.length; i++) out.add(line("ink", "  [" + host + "] " + (i + 1) + ": " + sample[i]));
+            out.add(line("dim", "  [" + host + "] … (" + (60 + inv.h32(app) % 120) + " lines total)"));
         }
-    }
-
-    private void stageBlock(List<PropTermLine> out, String host, String app, String blockPath, List<String> block) {
-        out.add(line("task", stars("TASK [stage pasted block on server]")));
-        out.add(line("ch", "changed: [nagad-" + host + "] => removed previous " + blockPath + " (if any), wrote "
-                + block.size() + " line(s) fresh"));
     }
 
     private void backup(List<PropTermLine> out, String host, String app, boolean test) {
@@ -227,29 +248,41 @@ public class PropertiesRunner {
     // ---- real execution (production) --------------------------------------------------------
 
     /**
-     * SSH to the jump host and run the real wrapper. For a block op the pasted lines are staged
-     * to {@link #blockFilePath} first — a prior file is removed and a fresh one created (base64
-     * on the wire so arbitrary property text can't break the shell) — then referenced with
-     * {@code --file}. Returns the classified console output.
+     * SSH to the jump host and run the real wrapper once per selected host. For a block op the
+     * pasted lines are staged to {@link #blockFilePath} first — a prior file removed and a fresh
+     * one created (base64 on the wire so arbitrary property text can't break the shell) — then
+     * reused with {@code --file} for every host. Returns the classified console output.
      */
     public List<PropTermLine> execute(PropertiesRequest r) throws IOException, InterruptedException {
-        String blockPath = blockFilePath(r.host(), r.app());
-        String cmd = command(r, blockPath);
+        String blockPath = blockFilePath(r.app());
+        String wd = shq(ansible.workingDir());
+        List<PropTermLine> out = new ArrayList<>();
 
-        StringBuilder remote = new StringBuilder("cd ").append(shq(ansible.workingDir())).append(" && ");
+        // Stage the pasted block once on the ops host, reused for every target host.
         if (BLOCK_OPS.contains(r.op())) {
             String b64 = Base64.getEncoder().encodeToString(
                     String.join("\n", blockLines(r.block())).getBytes(StandardCharsets.UTF_8));
-            // remove any previous staged file, then recreate it fresh from the pasted block
-            remote.append("rm -f ").append(shq(blockPath)).append(" && ")
-                  .append("printf %s ").append(shq(b64)).append(" | base64 -d > ").append(shq(blockPath)).append(" && ");
+            String stage = "cd " + wd + " && rm -f " + shq(blockPath)
+                    + " && printf %s " + shq(b64) + " | base64 -d > " + shq(blockPath)
+                    + " && echo staged " + shq(blockPath);
+            out.add(line("task", "TASK [stage pasted block on server]"));
+            try {
+                ansible.capture(stage, 60);
+                out.add(line("ch", "staged " + blockLines(r.block()).size() + " line(s) → " + blockPath));
+            } catch (IOException | InterruptedException e) {
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                out.add(line("fatal", "failed to stage block: " + e.getMessage()));
+                throw e;
+            }
         }
-        remote.append(cmd);
 
-        String raw = ansible.capture(remote.toString(), 120);
-        List<PropTermLine> out = new ArrayList<>();
-        out.add(line("user", "$ " + cmd));
-        for (String l : raw.split("\n", -1)) out.add(classify(l));
+        for (String host : r.hosts()) {
+            String cmd = command(host, r, blockPath);
+            out.add(line("user", "$ " + cmd));
+            String remote = "cd " + wd + " && " + cmd;
+            String raw = ansible.capture(remote, 120);
+            for (String l : raw.split("\n", -1)) out.add(classify(l));
+        }
         return out;
     }
 

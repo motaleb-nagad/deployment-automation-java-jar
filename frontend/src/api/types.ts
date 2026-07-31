@@ -65,6 +65,25 @@ export interface StgUploadResponse { kind: string; target: string; storedName: s
 export interface StgDeployRequest { group: string; apps: string[]; actions: string[]; }
 export interface StgPortalUiRequest { uis: string[]; date: string; }
 
+// ---- staging application-properties + history ----
+export interface StgPropAppView { key: string; jar: string; cfgFile: string; }
+export interface StgPropGroupView { key: string; label: string; host: string; ip: string; apps: StgPropAppView[]; }
+export interface StgPropertiesCatalog { groups: StgPropGroupView[]; ops: string[]; blockOps: string[]; cfgPathTemplate: string; }
+export interface StgPropertiesRequest {
+  group: string; app: string; op: string; testMode: boolean;
+  oldLine?: string; newLine?: string; key?: string; values?: string;
+  oldKey?: string; newKey?: string; afterLine?: string; block?: string;
+}
+export interface StgPropTermLine { level: string; text: string; }
+export interface StgPropertiesResult {
+  command: string; host: string; targetFile: string; backupFile: string;
+  testMode: boolean; changed: boolean; savedBlockPath: string | null; lines: StgPropTermLine[];
+}
+export interface StgHistoryRow {
+  id: string; group: string; host: string; apps: string; actions: string;
+  startedBy: string; startedAt: string; duration: string | null; result: string | null;
+}
+
 export interface DeploymentView {
   id: string; promotionId: string | null; group: string; hosts: string; apps: string;
   actions: string; startedBy: string; startedAt: string; duration: string | null;
@@ -93,7 +112,7 @@ export interface PropertiesCatalog {
   groups: PropGroupView[]; ops: string[]; blockOps: string[]; cfgPathTemplate: string;
 }
 export interface PropertiesRequest {
-  host: string; app: string; op: string; testMode: boolean;
+  hosts: string[]; app: string; op: string; testMode: boolean;
   oldLine?: string; newLine?: string; key?: string; values?: string;
   oldKey?: string; newKey?: string; afterLine?: string; block?: string;
 }
