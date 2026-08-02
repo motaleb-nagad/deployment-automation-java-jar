@@ -43,4 +43,16 @@ public class ProdHashService {
                 .filter(h -> h != null && !h.isBlank())
                 .orElseGet(() -> inv.hash(group, app));
     }
+
+    /** Like {@link #current} but forces a fresh read of the live jar (drops the cache first) —
+     *  used for the "after" hash right after a deploy so it reflects what was just installed. */
+    @Transactional(readOnly = true)
+    public String refreshed(String group, String app) {
+        if (!simulate) {
+            collector.invalidate(group);
+            var live = collector.hashFor(group, app);
+            if (live.isPresent()) return live.get();
+        }
+        return current(group, app);
+    }
 }

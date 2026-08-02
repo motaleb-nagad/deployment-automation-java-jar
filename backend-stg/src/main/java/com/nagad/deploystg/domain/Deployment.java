@@ -63,4 +63,13 @@ public class Deployment {
     }
 
     public String getId() { return id; }
+    public String getPromotionId() { return promotionId; }
+    public String getGroupName() { return groupName; }
+    public String getHosts() { return hosts; }
+    public String getApps() { return apps; }
+    public String getActions() { return actions; }
+    public String getStartedBy() { return startedBy; }
+    public Instant getStartedAt() { return startedAt; }
+    public String getDuration() { return duration; }
+    public String getResult() { return result; }
 }

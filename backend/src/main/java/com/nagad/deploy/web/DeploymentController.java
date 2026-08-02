@@ -33,6 +33,13 @@ public class DeploymentController {
         return deployments.stagedJars();
     }
 
+    /** Remove one staged jar from files/jars/ (un-stage a fetched build). Needs write (w). */
+    @DeleteMapping("/deploy/staged-jars/{jar}")
+    public List<StagedJarView> removeStagedJar(@PathVariable("jar") String jar) {
+        deployments.removeStagedJar(current.require(), jar);
+        return deployments.stagedJars();
+    }
+
     /** Validate and register a run; returns the id to stream. */
     @PostMapping("/deploy")
     public DeployStartedResponse start(@RequestBody DeployRequest req) {

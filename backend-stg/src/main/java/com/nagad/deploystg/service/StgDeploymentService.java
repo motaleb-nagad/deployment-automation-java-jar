@@ -71,6 +71,22 @@ public class StgDeploymentService {
         this.executor = runExecutor;
     }
 
+    // ---- history ----------------------------------------------------------------------------
+
+    private static final java.time.format.DateTimeFormatter HIST_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm").withZone(java.time.ZoneOffset.UTC);
+
+    /** Everything done in staging — runs, portal-UI deploys and property edits — newest first. */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public java.util.List<StgHistoryRow> history() {
+        return deployments.findTop200ByGroupNameStartingWithOrderByStartedAtDesc("stg").stream()
+                .map(d -> new StgHistoryRow(d.getId(), d.getGroupName(), d.getHosts(), d.getApps(),
+                        d.getActions(), d.getStartedBy(),
+                        d.getStartedAt() == null ? null : HIST_FMT.format(d.getStartedAt()),
+                        d.getDuration(), d.getResult()))
+                .toList();
+    }
+
     // ---- catalog ----------------------------------------------------------------------------
 
     public StgCatalog catalog() {

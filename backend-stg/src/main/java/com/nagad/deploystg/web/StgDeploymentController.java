@@ -52,4 +52,10 @@ public class StgDeploymentController {
     public SseEmitter stream(@RequestParam("ticket") String ticket) {
         return stg.stream(ticket);
     }
+
+    /** Staging history — runs, portal-UI deploys and property edits done in staging. */
+    @GetMapping("/deployments")
+    public java.util.List<StgHistoryRow> history() {
+        return stg.history();
+    }
 }

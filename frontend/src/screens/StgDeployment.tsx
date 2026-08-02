@@ -4,8 +4,11 @@ import { api, ApiError, openDeployStream, uploadFile, type ResultRow } from '../
 import { useApp } from '../store/app';
 import { C, rule1, rule2, TERM } from '../theme/colors';
 import type { StgCatalog, StgUploadResponse } from '../api/types';
+import { StgProperties } from './StgProperties';
+import { StgHistory } from './StgHistory';
 
 const mono = 'var(--mono)';
+type StgView = 'deploy' | 'properties' | 'history';
 type Channel = 'app' | 'portal-ui';
 type Step = 'build' | 'confirm' | 'running' | 'result';
 interface TermLine { level: string; text: string; }
@@ -34,6 +37,7 @@ const shortHash = (h: string) => (h ? h.slice(0, 12) + '…' + h.slice(-8) : '')
  */
 export function StgDeployment() {
   const { me, flash } = useApp();
+  const [stgView, setStgView] = useState<StgView>('deploy');
   const qc = useQueryClient();
   const { data: cat } = useQuery({ queryKey: ['stg', 'catalog'], queryFn: () => api.get<StgCatalog>('/stg/catalog') });
 
@@ -167,6 +171,31 @@ export function StgDeployment() {
     }
   }
 
+  const stgNav = (
+    <div style={{ display: 'flex', gap: 2, border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)', flex: 'none' }}>
+      {([['deploy', 'DEPLOY'], ['properties', 'APPLICATION-PROPERTIES'], ['history', 'HISTORY']] as const).map(([v, label]) => (
+        <button key={v} onClick={() => setStgView(v)} style={{ border: 0, cursor: 'pointer', padding: '6px 12px',
+          fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 9.5, letterSpacing: '.1em',
+          background: stgView === v ? 'var(--color-neutral-100)' : 'transparent', color: stgView === v ? 'var(--color-text)' : 'var(--color-neutral-500)' }}>{label}</button>
+      ))}
+    </div>
+  );
+
+  // Application-properties / History views live under the same STG DEPLOYMENT tab.
+  if (stgView === 'properties' || stgView === 'history') return (
+    <main style={{ padding: '0 24px 48px', maxWidth: 1500 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, padding: '20px 0 14px', flexWrap: 'wrap' }}>
+        <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Staging — {stgView === 'properties' ? 'application properties' : 'history'}</h3>
+        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 10, letterSpacing: '.12em', color: 'var(--color-neutral-500)' }}>
+          {stgView === 'properties' ? 'SURGICAL IN-PLACE EDIT · MAPS TO ./properties.sh' : 'WHAT WAS DONE IN STAGING'}
+        </div>
+        <div style={{ flex: 1 }} />
+        {stgNav}
+      </div>
+      {stgView === 'properties' ? <StgProperties /> : <StgHistory />}
+    </main>
+  );
+
   if (!cat) return <main style={{ padding: 24, color: 'var(--color-neutral-500)' }}>loading…</main>;
 
   const allAppsOn = grp && apps.length === grp.apps.length && grp.apps.length > 0;
@@ -191,6 +220,7 @@ export function StgDeployment() {
           STEP 1 OF 3 — PHASES: {phaseOrder.join(' → ').toUpperCase()}
         </div>
         <div style={{ flex: 1 }} />
+        {stgNav}
         {channelSwitch}
       </div>
 

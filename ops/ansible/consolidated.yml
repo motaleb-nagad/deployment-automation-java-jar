@@ -111,9 +111,10 @@
       loop: "{{ pair_list }}"
       run_once: true
 
-    - name: Skip hosts that have no app assigned
-      meta: end_host
-      when: apps_list | length == 0
+    # NOTE: hosts with no assigned app simply fall through — every task below
+    # loops over `present_apps`, so an empty list is a no-op. (We avoid
+    # `meta: end_host`, which older ansible-core rejects with
+    # "invalid meta action requested: end_host".)
 
     # ---- Availability pre-check -----------------------------------------
     # A service "exists" on this host when its service user is present AND its
@@ -152,9 +153,9 @@
         msg: "SKIPPED on {{ inventory_hostname }} — service not installed here, continuing without it: {{ missing_apps | join(', ') }}"
       when: missing_apps | length > 0
 
-    - name: End this host if every targeted service is missing here
-      meta: end_host
-      when: present_apps | length == 0
+    # If every targeted service is missing on this host, `present_apps` is empty
+    # and all action loops below become no-ops — no early end_host needed (kept
+    # ansible-core-compatible; the SKIP markers above already flagged the pairs).
 
     - name: Record run start time
       set_fact:

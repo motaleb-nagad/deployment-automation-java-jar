@@ -236,6 +236,28 @@ public class StgAnsibleRunner {
         return out;
     }
 
+    /**
+     * Run a command on the jump host over SSH and return its merged stdout/stderr, bounded by a
+     * hard timeout. Used by the staging properties flow to stage a pasted block and run the
+     * wrapper non-interactively.
+     */
+    public String capture(String remoteCommand, int timeoutSeconds) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(sshArgv(remoteCommand));
+        pb.redirectErrorStream(true);
+        Process proc = pb.start();
+        StringBuilder out = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) out.append(line).append('\n');
+        }
+        if (!proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            proc.destroyForcibly();
+            throw new IOException("jump-host command timed out after " + timeoutSeconds + "s");
+        }
+        return out.toString();
+    }
+
     // ---- ssh plumbing -----------------------------------------------------------------------
 
     private List<String> sshArgv(String remoteCommand) throws IOException {
@@ -244,6 +266,7 @@ public class StgAnsibleRunner {
                 "-p", Integer.toString(sshPort),
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
+                "-o", "LogLevel=ERROR",
                 "-o", "StrictHostKeyChecking=" + (strictHostKey ? "yes" : "no")));
         if (!strictHostKey) { argv.add("-o"); argv.add("UserKnownHostsFile=/dev/null"); }
         argv.add(sshUser + "@" + sshHost);

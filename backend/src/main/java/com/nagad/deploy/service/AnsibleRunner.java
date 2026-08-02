@@ -301,12 +301,17 @@ public class AnsibleRunner {
                 + " | sed -n 's/^git\\.commit\\.id\\.abbrev=//p' | head -n1";
         try {
             String out = capture(remote, 120);
-            String hash = out == null ? "" : out.trim();
-            if (hash.contains("\n")) {
-                String[] parts = hash.split("\n");
-                hash = parts[parts.length - 1].trim();
+            // The sed prints the bare abbrev hash on its own line; pick the last line that is a
+            // pure hex token so any leaked ssh notice ("Warning: …", "** … post-quantum …") or a
+            // failed/empty fetch can never be mistaken for the hash.
+            String hash = null;
+            if (out != null) {
+                for (String line : out.split("\n")) {
+                    String t = line.trim();
+                    if (t.matches("[0-9a-fA-F]{7,40}")) hash = t;
+                }
             }
-            return hash.isBlank() ? Optional.empty() : Optional.of(hash);
+            return (hash == null || hash.isBlank()) ? Optional.empty() : Optional.of(hash);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.warn("staging git-hash read failed for {} on {}: {}", app, srcHost, e.toString());
@@ -359,12 +364,23 @@ public class AnsibleRunner {
         return capture(script, 60);
     }
 
+    /** Remove one staged jar (or {@code .jar.bkp.*} copy) from files/jars/ on the ops host. The
+     *  filename is validated by the caller; we still {@code --} guard and confine to that dir. */
+    public void removeStagedJar(String jarFile) throws IOException, InterruptedException {
+        String dir = workingDir + "/roles/deployment/files/jars";
+        String remote = "cd " + shq(dir) + " && rm -f -- " + shq(jarFile) + " && echo removed";
+        capture(remote, 30);
+    }
+
     private List<String> sshArgv(String remoteCommand) throws IOException {
         List<String> argv = new ArrayList<>(List.of(
                 "ssh", "-i", keyFile().toString(),
                 "-p", Integer.toString(sshPort),
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
+                // Quieten the client so host-key/PQ notices don't pollute captured command
+                // output (hash reads, fleet status). Parsers are hardened too, belt-and-braces.
+                "-o", "LogLevel=ERROR",
                 "-o", "StrictHostKeyChecking=" + (strictHostKey ? "yes" : "no")));
         if (!strictHostKey) { argv.add("-o"); argv.add("UserKnownHostsFile=/dev/null"); }
         argv.add(sshUser + "@" + sshHost);

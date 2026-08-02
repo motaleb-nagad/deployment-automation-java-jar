@@ -40,6 +40,7 @@ public class DeploymentService {
     private final DeploymentRepository deployments;
     private final DeploymentFinalizer finalizer;
     private final ProdHashService prodHash;
+    private final AuditService audit;
     private final ExecutorService executor;
 
     @Value("${nagad.ansible.simulate}")
@@ -57,17 +58,19 @@ public class DeploymentService {
     private record RunPlan(String deploymentId, String actor, Group group, List<String> hosts,
                            List<String> apps, List<String> actions, String cmd, List<Line> lines,
                            boolean consolidated, List<DeployPair> pairs,
-                           boolean portalUi, PortalUiRequest pui) {}
+                           boolean portalUi, PortalUiRequest pui,
+                           Map<String, String> beforeHashes) {}
 
     public DeploymentService(FleetInventory inv, AnsibleRunner runner, PromotionRepository promos,
                              DeploymentRepository deployments, DeploymentFinalizer finalizer,
-                             ProdHashService prodHash, ExecutorService runExecutor) {
+                             ProdHashService prodHash, AuditService audit, ExecutorService runExecutor) {
         this.inv = inv;
         this.runner = runner;
         this.promos = promos;
         this.deployments = deployments;
         this.finalizer = finalizer;
         this.prodHash = prodHash;
+        this.audit = audit;
         this.executor = runExecutor;
     }
 
@@ -118,11 +121,16 @@ public class DeploymentService {
         deployments.save(new Deployment(id, null, g.cmd(), AnsibleRunner.hostExpr(hosts),
                 String.join(",", req.apps()), String.join(",", req.actions()), actor.getUsername()));
 
+        // Snapshot the prod hash of each app BEFORE the run so the result's "before → after"
+        // compares the pre-deploy jar against the post-deploy jar (not two post-run reads).
+        Map<String, String> before = new LinkedHashMap<>();
+        for (String a : req.apps()) before.put(a, prodHash.current(g.cmd(), a));
+
         byte[] buf = new byte[32];
         random.nextBytes(buf);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
         pending.put(ticket, new RunPlan(id, actor.getUsername(), g, hosts, req.apps(), req.actions(), cmd,
-                runner.script(g, hosts, req.apps(), req.actions(), inv, cmd), false, null, false, null));
+                runner.script(g, hosts, req.apps(), req.actions(), inv, cmd), false, null, false, null, before));
         return new DeployStartedResponse(id, ticket);
     }
 
@@ -176,11 +184,18 @@ public class DeploymentService {
         deployments.save(new Deployment(id, null, "consolidated", AnsibleRunner.hostExpr(hosts),
                 String.join(",", apps), String.join(",", req.actions()), actor.getUsername()));
 
+        // Snapshot each pair's prod hash before the run (keyed host:app) for the before→after view.
+        Map<String, String> before = new LinkedHashMap<>();
+        for (DeployPair p : pairs) {
+            String grp = inv.groupForHost(p.host()).map(Group::cmd).orElse("consolidated");
+            before.put(p.host() + ":" + p.app(), prodHash.current(grp, p.app()));
+        }
+
         byte[] buf = new byte[32];
         random.nextBytes(buf);
         String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
         pending.put(ticket, new RunPlan(id, actor.getUsername(), null, hosts, apps, req.actions(), cmd,
-                runner.scriptConsolidated(pairs, req.actions(), inv, cmd), true, pairs, false, null));
+                runner.scriptConsolidated(pairs, req.actions(), inv, cmd), true, pairs, false, null, before));
         return new DeployStartedResponse(id, ticket);
     }
 
@@ -257,7 +272,7 @@ public class DeploymentService {
                 req.fixUrl(), req.fixSize(), req.date());
         pending.put(ticket, new RunPlan(id, actor.getUsername(), null, railHosts, req.uis(), phases, cmd,
                 runner.scriptPortalUi(mode, req.uis(), railHosts, req.fixUrl(), req.fixSize(), req.date(), inv, cmd),
-                false, null, true, resolved));
+                false, null, true, resolved, Map.of()));
         return new DeployStartedResponse(id, ticket);
     }
 
@@ -315,10 +330,10 @@ public class DeploymentService {
                         plan.hosts(), plan.cmd(), lastLog);
             } else if (plan.consolidated()) {
                 rows = finalizer.commitConsolidated(plan.deploymentId(), plan.actor(), plan.pairs(),
-                        plan.actions(), plan.cmd(), lastLog, skipped);
+                        plan.actions(), plan.cmd(), lastLog, skipped, plan.beforeHashes());
             } else {
                 rows = finalizer.commit(plan.deploymentId(), plan.actor(), plan.group().cmd(),
-                        plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog);
+                        plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog, plan.beforeHashes());
             }
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
                     "deploymentId", plan.deploymentId(), "result", "ok", "rows", rows)));
@@ -473,6 +488,35 @@ public class DeploymentService {
             } catch (NumberFormatException ignored) { /* fall through */ }
         }
         return t;
+    }
+
+    // Safe staged-jar filename: letters/digits/._- only (blocks path traversal to the rm).
+    private static final java.util.regex.Pattern JAR_FILE = java.util.regex.Pattern.compile("^[A-Za-z0-9._-]+$");
+
+    /** Remove a staged jar from files/jars/ (real) or un-stage its fetched promotion(s) (demo).
+     *  Needs the write (w) permission — it clears a build that was fetched for deploy. */
+    @Transactional
+    public void removeStagedJar(AppUser actor, String jarFile) {
+        if (!actor.isPermW()) {
+            throw new ResponseStatusException(FORBIDDEN, "removing a staged jar needs the write (w) permission");
+        }
+        String jar = jarFile == null ? "" : jarFile.trim();
+        if (!JAR_FILE.matcher(jar).matches() || !(jar.endsWith(".jar") || jar.contains(".jar.bkp"))) {
+            throw new ResponseStatusException(BAD_REQUEST, "invalid jar file " + jar);
+        }
+        if (simulate) {
+            List<com.nagad.deploy.domain.Promotion> match = promos.findAllByOrderByRequestedAtDesc().stream()
+                    .filter(p -> jar.equals(p.getJar())).toList();
+            promos.deleteAll(match);
+        } else {
+            try {
+                runner.removeStagedJar(jar);
+            } catch (IOException | InterruptedException e) {
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                throw new ResponseStatusException(BAD_GATEWAY, "could not remove staged jar: " + e.getMessage());
+            }
+        }
+        audit.recordSelf(actor.getUsername(), "unstage-jar", jar, "removed staged jar " + jar);
     }
 
     /** First app key whose jar_map entry matches this jar file (jars are shared by some apps). */
