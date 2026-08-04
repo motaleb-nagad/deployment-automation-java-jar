@@ -63,7 +63,7 @@ export interface StgGroupView { key: string; label: string; host: string; ip: st
 export interface StgCatalog { groups: StgGroupView[]; uis: string[]; workingDir: string; }
 export interface StgUploadResponse { kind: string; target: string; storedName: string; targetPath: string; size: number; sha256: string; }
 export interface StgDeployRequest { group: string; apps: string[]; actions: string[]; }
-export interface StgPortalUiRequest { uis: string[]; date: string; }
+export interface StgPortalUiRequest { uis: string[]; date: string; urlFix: boolean; sizeFix: boolean; }
 
 // ---- staging application-properties + history ----
 export interface StgPropAppView { key: string; jar: string; cfgFile: string; }

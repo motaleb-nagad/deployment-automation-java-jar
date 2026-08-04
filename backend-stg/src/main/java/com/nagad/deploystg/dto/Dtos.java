@@ -27,8 +27,10 @@ public final class Dtos {
     /** Staging jar/config deploy — {@code ./run.sh <group> all <apps> <actions>} on the stg host. */
     public record StgDeployRequest(String group, List<String> apps, List<String> actions) {}
 
-    /** Staging portal-UI deploy — {@code portalui/run.sh <uis> [date]}. */
-    public record StgPortalUiRequest(List<String> uis, String date) {}
+    /** Staging portal-UI deploy — {@code portalui/run.sh <uis> [date] [--url-fix] [--size-fix]}.
+     *  {@code urlFix} rewrites the backend URLs to the staging values baked into the wrapper's
+     *  ui_urls map; {@code sizeFix} sets nginx client_max_body_size. */
+    public record StgPortalUiRequest(List<String> uis, String date, boolean urlFix, boolean sizeFix) {}
 
     /** streamTicket is a single-use, short-lived credential for opening the SSE stream. */
     public record DeployStartedResponse(String deploymentId, String streamTicket) {}

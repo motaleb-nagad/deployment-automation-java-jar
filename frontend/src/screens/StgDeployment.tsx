@@ -48,6 +48,8 @@ export function StgDeployment() {
   const [actions, setActions] = useState<string[]>([...APP_PHASES]);
   const [uis, setUis] = useState<string[]>([]);
   const [date, setDate] = useState('');
+  const [urlFix, setUrlFix] = useState(false);
+  const [sizeFix, setSizeFix] = useState(false);
 
   // Files CHOSEN in the browser (not yet uploaded) — staged during the run's upload phase.
   const [jarFile, setJarFile] = useState<Record<string, File>>({});
@@ -86,7 +88,7 @@ export function StgDeployment() {
 
   const runCmd = channel === 'app'
     ? `./run.sh ${group} all ${apps.join(',') || '<apps>'} ${runActions.join(',')}`
-    : `./run.sh ${uis.join(',') || '<ui>'}${date ? ' ' + date : ''}`;
+    : `./run.sh ${uis.join(',') || '<ui>'}${date ? ' ' + date : ''}${urlFix ? ' --url-fix' : ''}${sizeFix ? ' --size-fix' : ''}`;
   const willRun = channel === 'app' ? runActions.length > 0 : actions.includes('deploy');
 
   // upload-phase requirements
@@ -105,7 +107,7 @@ export function StgDeployment() {
 
   function reset() {
     setStep('build'); setApps([]); setActions([...(channel === 'app' ? APP_PHASES : UI_PHASES)]);
-    setUis([]); setDate(''); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({});
+    setUis([]); setDate(''); setUrlFix(false); setSizeFix(false); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({});
     setLines([]); setRail({}); setResult([]); setDone(false);
   }
 
@@ -152,7 +154,7 @@ export function StgDeployment() {
       // ---- PHASE 2: run (stop/deploy/start, or portal-ui deploy) ----
       if (willRun) {
         const path = channel === 'app' ? '/stg/deploy' : '/stg/portal-ui';
-        const body = channel === 'app' ? { group, apps, actions: runActions } : { uis, date };
+        const body = channel === 'app' ? { group, apps, actions: runActions } : { uis, date, urlFix, sizeFix };
         const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>(path, body);
         openDeployStream(streamTicket, {
           onLine: (l) => setLines((p) => [...p, l]),
@@ -302,6 +304,21 @@ export function StgDeployment() {
                 <input value={date} onChange={(e) => setDate(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))} placeholder="today" style={inputStyle} />
               </div>
 
+              <div>
+                <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>REWRITE <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— staging-server config on deploy</span></h6>
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-200)' }}>
+                    <input type="checkbox" checked={urlFix} onChange={(e) => setUrlFix(e.target.checked)} />
+                    <span>--url-fix <span style={{ color: 'var(--color-neutral-500)' }}>— rewrite backend URLs to the staging values</span></span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-200)' }}>
+                    <input type="checkbox" checked={sizeFix} onChange={(e) => setSizeFix(e.target.checked)} />
+                    <span>--size-fix <span style={{ color: 'var(--color-neutral-500)' }}>— set nginx max body size</span></span>
+                  </label>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--color-neutral-500)', marginTop: 6 }}>Off = deploy the tarball as-is. URL-fix swaps QA URLs for the per-UI staging URLs baked into <span style={{ fontFamily: mono }}>portalui/run.sh</span>.</div>
+              </div>
+
               {uis.length > 0 && actions.includes('upload') && (
                 <div>
                   <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>FILES TO UPLOAD <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— one .tar / .tar.gz per UI (stored as &lt;ui&gt;.tar)</span></h6>
@@ -335,7 +352,7 @@ export function StgDeployment() {
             <div style={{ borderTop: rule2 }}>
               {(channel === 'app'
                 ? [`env: STAGING`, `group: ${group}`, `host: ${host}`, `apps: ${apps.join(', ') || '—'}`, `phases: ${selectedPhases.join(' → ') || '—'}`]
-                : [`env: STAGING`, `host: ${host}`, `UIs: ${uis.join(', ') || '—'}`, `phases: ${selectedPhases.join(' → ') || '—'}`, `backup: ${date || 'today'}`]
+                : [`env: STAGING`, `host: ${host}`, `UIs: ${uis.join(', ') || '—'}`, `phases: ${selectedPhases.join(' → ') || '—'}`, `backup: ${date || 'today'}`, `url-fix: ${urlFix ? 'on' : 'off'}${sizeFix ? ' · size-fix: on' : ''}`]
               ).map((b, i) => (
                 <div key={i} style={{ padding: '8px 2px', borderBottom: rule1, fontSize: 12.5, color: 'var(--color-neutral-300)' }}>{b}</div>
               ))}

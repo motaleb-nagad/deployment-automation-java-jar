@@ -59,7 +59,8 @@ public class StgDeploymentService {
 
     private record RunPlan(String deploymentId, String actor, boolean portalUi,
                            String group, String host, List<String> apps, List<String> actions,
-                           List<String> uis, String date, String cmd, List<Line> lines) {}
+                           List<String> uis, String date, String cmd, List<Line> lines,
+                           boolean urlFix, boolean sizeFix) {}
 
     public StgDeploymentService(StgInventory inv, StgAnsibleRunner runner,
                                 DeploymentRepository deployments, StgFinalizer finalizer,
@@ -188,7 +189,7 @@ public class StgDeploymentService {
 
         RunPlan plan = new RunPlan(id, actor.username(), false, group, g.host(),
                 req.apps(), req.actions(), null, null, cmd,
-                runner.script(group, g.host(), req.apps(), req.actions(), inv, cmd));
+                runner.script(group, g.host(), req.apps(), req.actions(), inv, cmd), false, false);
         return register(plan);
     }
 
@@ -212,14 +213,15 @@ public class StgDeploymentService {
             throw new ResponseStatusException(BAD_REQUEST, "date must be DDMMYYYY (8 digits)");
         }
         String host = inv.group("portal").map(StgInventory.Group::host).orElse("ngd-dc-portal-01");
-        String cmd = runner.portalUiCommand(req.uis(), date);
+        String cmd = runner.portalUiCommand(req.uis(), date, req.urlFix(), req.sizeFix());
         String id = "STG-" + seq.getAndIncrement();
         deployments.save(new Deployment(id, null, "stg-portal-ui", host,
-                String.join(",", req.uis()), "deploy", actor.username()));
+                String.join(",", req.uis()), req.urlFix() ? "deploy+url-fix" : "deploy", actor.username()));
 
         RunPlan plan = new RunPlan(id, actor.username(), true, "portal", host,
                 null, List.of("deploy"), req.uis(), date, cmd,
-                runner.scriptPortalUi(req.uis(), date, host, cmd));
+                runner.scriptPortalUi(req.uis(), date, host, cmd, req.urlFix(), req.sizeFix()),
+                req.urlFix(), req.sizeFix());
         return register(plan);
     }
 
@@ -292,7 +294,7 @@ public class StgDeploymentService {
             }
         };
         int code = plan.portalUi()
-                ? runner.executePortalUi(plan.uis(), plan.date(), sink)
+                ? runner.executePortalUi(plan.uis(), plan.date(), plan.urlFix(), plan.sizeFix(), sink)
                 : runner.execute(plan.group(), plan.apps(), plan.actions(), sink);
         if (code != 0) {
             throw new IllegalStateException((plan.portalUi() ? "portalui run.sh" : "run.sh")
