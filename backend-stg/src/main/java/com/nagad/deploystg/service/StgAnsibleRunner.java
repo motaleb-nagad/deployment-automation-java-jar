@@ -74,10 +74,13 @@ public class StgAnsibleRunner {
         return "./run.sh " + group + " all " + String.join(",", apps) + " " + String.join(",", actions);
     }
 
-    /** The staging portal-UI wrapper command: {@code portalui/run.sh <uis> [date]}. */
-    public String portalUiCommand(List<String> uis, String date) {
+    /** The staging portal-UI wrapper command:
+     *  {@code portalui/run.sh <uis> [date] [--url-fix] [--size-fix]}. */
+    public String portalUiCommand(List<String> uis, String date, boolean urlFix, boolean sizeFix) {
         StringBuilder sb = new StringBuilder("./run.sh ").append(String.join(",", uis));
         if (date != null && !date.isBlank()) sb.append(' ').append(date.trim());
+        if (urlFix) sb.append(" --url-fix");
+        if (sizeFix) sb.append(" --size-fix");
         return sb.toString();
     }
 
@@ -140,9 +143,9 @@ public class StgAnsibleRunner {
     }
 
     /** SSH to the jump host and run the staging portal-UI wrapper, streaming stdout. */
-    public int executePortalUi(List<String> uis, String date, Consumer<Line> sink)
+    public int executePortalUi(List<String> uis, String date, boolean urlFix, boolean sizeFix, Consumer<Line> sink)
             throws IOException, InterruptedException {
-        String cmd = portalUiCommand(uis, date);
+        String cmd = portalUiCommand(uis, date, urlFix, sizeFix);
         return runRemote("cd " + shq(stgDir + "/portalui") + " && " + cmd, cmd, "deploy", sink);
     }
 
@@ -205,15 +208,16 @@ public class StgAnsibleRunner {
         return out;
     }
 
-    /** Demo mode: scripted staging portal-UI output (copy → backup → extract per UI). */
-    public List<Line> scriptPortalUi(List<String> uis, String date, String host, String cmd) {
+    /** Demo mode: scripted staging portal-UI output (copy → backup → extract [→ url-fix] per UI). */
+    public List<Line> scriptPortalUi(List<String> uis, String date, String host, String cmd,
+                                     boolean urlFix, boolean sizeFix) {
         List<Line> out = new ArrayList<>();
         out.add(Line.log("user", "$ " + cmd));
         out.add(Line.log("dim", "============================================"));
         out.add(Line.log("dim", " Portal UI deploy (STAGING: " + host + ")"));
         out.add(Line.log("dim", " UI      : " + String.join(",", uis)));
         out.add(Line.log("dim", " Date    : " + ((date == null || date.isBlank()) ? "today" : date.trim())));
-        out.add(Line.log("dim", " Mode    : as-is (no URL fix, no MAX_FILE_SIZE)"));
+        out.add(Line.log("dim", " Mode    : " + (urlFix ? "URL fix" : "as-is") + (sizeFix ? " + MAX_FILE_SIZE" : "")));
         out.add(Line.log("dim", "============================================"));
         out.add(Line.log("ink", stars("PLAY [PORTAL UI DEPLOYMENT — STAGING]")));
         out.add(Line.log("task", stars("TASK [Pinging Server]")));
@@ -229,11 +233,26 @@ public class StgAnsibleRunner {
             out.add(Line.log("task", stars("TASK [Extracting " + ui + ".tar]")));
             out.add(Line.host("ch", "changed: [" + host + "] => extracted "
                     + ui + ".tar → /usr/local/nginx/html/ui/" + ui, host, "deploy", "done"));
+            if (urlFix) {
+                out.add(Line.log("task", stars("TASK [URL fix : " + ui + "]")));
+                out.add(Line.host("ch", "changed: [" + host + "] => rewrote backend URLs → "
+                        + stgUrlHint(ui), host, "deploy", "done"));
+            }
         }
         out.add(Line.log("ink", stars("PLAY RECAP")));
-        out.add(Line.log("ok", pad(host) + ": ok=1  changed="
-                + (uis.size() * portalUiPhases().size()) + "  unreachable=0  failed=0"));
+        int changed = uis.size() * (portalUiPhases().size() + (urlFix ? 1 : 0));
+        out.add(Line.log("ok", pad(host) + ": ok=1  changed=" + changed + "  unreachable=0  failed=0"));
         return out;
+    }
+
+    /** Representative staging host a UI's backend URLs are rewritten to (demo display only). */
+    private static String stgUrlHint(String ui) {
+        return switch (ui) {
+            case "dms" -> "https://dmstest.mynagad.com";
+            case "system" -> "https://systest.mynagad.com";
+            case "call-center" -> "https://cctest.mynagad.com";
+            default -> "https://<" + ui + ">test.mynagad.com";
+        };
     }
 
     /**
