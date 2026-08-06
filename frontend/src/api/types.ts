@@ -83,6 +83,7 @@ export interface StgHistoryRow {
   id: string; group: string; host: string; apps: string; actions: string;
   startedBy: string; startedAt: string; duration: string | null; result: string | null;
 }
+export interface StgServiceHash { app: string; jar: string; host: string; hash: string; status: string; }
 
 export interface DeploymentView {
   id: string; promotionId: string | null; group: string; hosts: string; apps: string;

@@ -30,6 +30,12 @@ public class StgDeploymentController {
         return stg.catalog();
     }
 
+    /** Deployed-hash board: each service in a group with the git hash of its live staging jar. */
+    @GetMapping("/hashes")
+    public java.util.List<StgServiceHash> hashes(@RequestParam("group") String group) {
+        return stg.serviceHashes(group);
+    }
+
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public StgUploadResponse upload(@RequestParam("kind") String kind,
                                     @RequestParam(value = "group", required = false) String group,

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, openDeployStream, uploadFile, type ResultRow } from '../api/client';
 import { useApp } from '../store/app';
 import { C, rule1, rule2, TERM } from '../theme/colors';
-import type { StgCatalog, StgUploadResponse } from '../api/types';
+import type { StgCatalog, StgUploadResponse, StgServiceHash } from '../api/types';
 import { StgProperties } from './StgProperties';
 import { StgHistory } from './StgHistory';
 
@@ -289,6 +289,8 @@ export function StgDeployment() {
               {deployNoJar && (
                 <div style={{ fontSize: 11.5, color: C.warn }}>Deploy is selected without upload — it will use the jar already staged in <span style={{ fontFamily: mono }}>files/jars/</span> on the ops host.</div>
               )}
+
+              <HashBoard group={group} host={host} />
             </>
           ) : (
             <>
@@ -511,6 +513,44 @@ export function StgDeployment() {
         </div>
       )}
     </main>
+  );
+}
+
+/** Deployed-hash dashboard: for the selected group, the git commit hash of the jar currently
+ *  deployed at /home/<app>/was/<jar> on the staging host — one row per service. Read live from
+ *  GET /stg/hashes (deterministic stand-ins in demo mode); refreshable on demand. */
+function HashBoard({ group, host }: { group: string; host: string }) {
+  const { data, isFetching, isError, refetch } = useQuery({
+    queryKey: ['stg', 'hashes', group],
+    queryFn: () => api.get<StgServiceHash[]>(`/stg/hashes?group=${encodeURIComponent(group)}`),
+    staleTime: 30_000,
+  });
+  const rows = data ?? [];
+  const dot = (status: string) => status === 'ok' || status === 'simulated' ? C.run : status === 'missing' ? C.warn : C.stop;
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
+        <h6 style={{ color: 'var(--color-neutral-400)', margin: 0 }}>DEPLOYED HASHES <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--color-neutral-500)' }}>— git commit of each live jar on {host}</span></h6>
+        <button onClick={() => refetch()} style={linkBtn}>{isFetching ? 'REFRESHING…' : 'REFRESH'}</button>
+      </div>
+      {isError ? (
+        <div style={{ fontSize: 11.5, color: C.stop }}>Could not read staging hashes.</div>
+      ) : rows.length === 0 ? (
+        <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)' }}>{isFetching ? 'reading /home/<app>/was/…' : 'no services'}</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 2, borderTop: rule1 }}>
+          {rows.map((r) => (
+            <div key={r.app} title={`${r.jar} · ${r.host} · ${r.status}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 4px', borderBottom: rule1, fontFamily: mono, fontSize: 12 }}>
+              <span style={{ width: 8, height: 8, background: dot(r.status), flex: 'none' }} />
+              <span style={{ color: 'var(--color-neutral-100)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.app}</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ color: r.hash ? 'var(--color-accent-400)' : 'var(--color-neutral-600)' }}>{r.hash || (r.status === 'missing' ? 'no jar' : '—')}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

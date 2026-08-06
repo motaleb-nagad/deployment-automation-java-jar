@@ -267,6 +267,52 @@ public class StgAnsibleRunner {
     }
 
     /**
+     * Read the {@code git.commit.id.abbrev} of the jar currently deployed for each app under
+     * {@code /home/<app>/was/<jar>} on its staging host — the same value {@code hash-check.sh}
+     * prints. Apps are grouped by host and read with a single {@code ansible ... -m shell} ad-hoc
+     * per host (run from the bundle so its {@code ansible.cfg}/inventory apply); the per-app jar
+     * hash is emitted as {@code __HASH__<app>\t<hash>} lines we parse back out of ansible's output.
+     * Returns app → hash; an app missing from the map (or mapped to blank) means the hash could
+     * not be read. Real mode only — never touches production.
+     */
+    public java.util.Map<String, String> readDeployedHashes(java.util.List<StgInventory.App> apps)
+            throws IOException, InterruptedException {
+        java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
+        // Group apps by the staging host they live on (one for core/portal, several for npsb-zone).
+        java.util.Map<String, java.util.List<StgInventory.App>> byHost = new java.util.LinkedHashMap<>();
+        for (StgInventory.App a : apps) {
+            byHost.computeIfAbsent(a.host(), h -> new ArrayList<>()).add(a);
+        }
+        for (var entry : byHost.entrySet()) {
+            String host = entry.getKey();
+            if (host == null || host.isBlank()) continue;
+            StringBuilder script = new StringBuilder();
+            for (StgInventory.App a : entry.getValue()) {
+                String jarPath = "/home/" + a.key() + "/was/" + a.jar();
+                // Emit __HASH__<app>\t<hash> so the app key survives ansible's per-host output framing.
+                script.append("h=$(unzip -p ").append(shq(jarPath))
+                        .append(" BOOT-INF/classes/git.properties 2>/dev/null | tr -d '\\r'")
+                        .append(" | sed -n 's/^git\\.commit\\.id\\.abbrev=//p' | head -n1); ")
+                        .append("printf '__HASH__%s\\t%s\\n' ").append(shq(a.key())).append(" \"$h\"; ");
+            }
+            String remote = "cd " + shq(stgDir) + " && ansible " + shq(host)
+                    + " -m shell -a " + shq(script.toString()) + " 2>&1";
+            String out = capture(remote, 120);
+            if (out == null) continue;
+            for (String line : out.split("\n")) {
+                String t = line.trim();
+                int tab = t.indexOf('\t');
+                if (t.startsWith("__HASH__") && tab > 8) {
+                    String app = t.substring("__HASH__".length(), tab).trim();
+                    String hash = t.substring(tab + 1).trim();
+                    if (hash.matches("[0-9a-fA-F]{7,40}")) result.put(app, hash);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * Run a command on the jump host over SSH and return its merged stdout/stderr, bounded by a
      * hard timeout. Used by the staging properties flow to stage a pasted block and run the
      * wrapper non-interactively.

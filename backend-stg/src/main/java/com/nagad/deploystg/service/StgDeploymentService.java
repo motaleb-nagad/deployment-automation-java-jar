@@ -98,6 +98,50 @@ public class StgDeploymentService {
         return new StgCatalog(groups, StgInventory.UIS, runner.stgDir());
     }
 
+    // ---- deployed-hash board ----------------------------------------------------------------
+
+    /**
+     * The git commit hash of the jar currently deployed for each service in a group — read live
+     * from {@code /home/<app>/was/<jar>} on the staging host(s) in real mode, or deterministic
+     * stand-ins in demo mode. Powers the service→hash dashboard on the STG DEPLOYMENT screen.
+     */
+    public List<StgServiceHash> serviceHashes(String group) {
+        String g = requireGroup(group);
+        List<StgInventory.App> apps = inv.apps(g);
+        if (simulate) {
+            return apps.stream().map(a -> new StgServiceHash(
+                    a.key(), a.jar(), a.host(), demoHash(g, a.key(), a.jar()), "simulated")).toList();
+        }
+        Map<String, String> hashes;
+        boolean reachable = true;
+        try {
+            hashes = runner.readDeployedHashes(apps);
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("stg deployed-hash read for group {} failed: {}", g, e.toString());
+            hashes = Map.of();
+            reachable = false;
+        }
+        final boolean ok = reachable;
+        final Map<String, String> found = hashes;
+        return apps.stream().map(a -> {
+            String h = found.get(a.key());
+            if (h != null && !h.isBlank()) return new StgServiceHash(a.key(), a.jar(), a.host(), h, "ok");
+            return new StgServiceHash(a.key(), a.jar(), a.host(), "", ok ? "missing" : "unreachable");
+        }).toList();
+    }
+
+    /** Deterministic 7-hex-char stand-in hash for demo mode (FNV-1a over group+app+jar). */
+    private static String demoHash(String group, String app, String jar) {
+        long h = 2166136261L;
+        for (char c : (group + ":" + app + ":" + jar).toCharArray()) {
+            h ^= (c & 0xff);
+            h = (h * 16777619L) & 0xffffffffL;
+        }
+        String hex = Long.toHexString(0x1_0000_0000L | (h & 0xffffffffL)).substring(1); // 8 hex chars
+        return hex.substring(0, 7);
+    }
+
     // ---- upload -----------------------------------------------------------------------------
 
     /**
