@@ -64,4 +64,10 @@ public final class Dtos {
     // ---- staging history (what was done in staging) ----
     public record StgHistoryRow(String id, String group, String host, String apps, String actions,
                                 String startedBy, String startedAt, String duration, String result) {}
+
+    /** One row of the staging deployed-hash board: the {@code git.commit.id.abbrev} embedded in
+     *  the jar currently deployed at {@code /home/<app>/was/<jar>} on the service's staging host.
+     *  {@code status} is {@code ok} (hash read), {@code missing} (no jar / git.properties there),
+     *  {@code unreachable} (host/ansible read failed) or {@code simulated} (demo stand-in). */
+    public record StgServiceHash(String app, String jar, String host, String hash, String status) {}
 }
