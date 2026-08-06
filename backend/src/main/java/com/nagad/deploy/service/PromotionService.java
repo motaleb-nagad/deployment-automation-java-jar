@@ -91,9 +91,10 @@ public class PromotionService {
                         "you are not scoped to deploy " + app + " (group " + destGroup + ")");
             }
             String jar = FleetInventory.JAR_MAP.getOrDefault(app, app + "-1.0.jar");
-            String hash = stagingHash(app, src.host(), jar);
+            String srcHost = staging.hostFor(src, app);
+            String hash = stagingHash(app, srcHost, jar);
             String prod = prodHash.current(destGroup, app);
-            out.add(new PromotionView("preview", app, destGroup, src.host(), jar,
+            out.add(new PromotionView("preview", app, destGroup, srcHost, jar,
                     hash, prod, prod, false, "release/8.2", estimateSize(jar),
                     actor.getUsername(), null, "preview", null, null, null));
         }
@@ -118,19 +119,20 @@ public class PromotionService {
                         "you are not scoped to deploy " + app + " (group " + destGroup + ")");
             }
             String jar = FleetInventory.JAR_MAP.getOrDefault(app, app + "-1.0.jar");
+            String srcHost = staging.hostFor(src, app);
             // The staged build's hash — in real mode the jar's actual git.commit.id.abbrev
             // (matches hash-check.sh); a deterministic stand-in in demo mode.
-            String newHash = stagingHash(app, src.host(), jar);
+            String newHash = stagingHash(app, srcHost, jar);
             String prevHash = inv.hash(destGroup, app);
             String id = "PR-" + seq.getAndIncrement();
 
-            Promotion p = new Promotion(id, app, destGroup, src.host(), jar, newHash, prevHash,
+            Promotion p = new Promotion(id, app, destGroup, srcHost, jar, newHash, prevHash,
                     "release/8.2", estimateSize(jar), actor.getUsername());
             // Approval gate retired: a fetched jar is immediately deployable.
             p.decide(PromotionStatus.APPROVED, actor.getUsername(), null);
             promos.save(p);
             audit.record(actor.getUsername(), "fetch", id + " " + app,
-                    "fetched " + jar + " (" + newHash + ") from " + src.host());
+                    "fetched " + jar + " (" + newHash + ") from " + srcHost);
             created.add(view(p));
         }
         return created;

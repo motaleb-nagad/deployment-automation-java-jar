@@ -170,41 +170,52 @@ public class StgAnsibleRunner {
 
     // ---- demo mode (scripted output) --------------------------------------------------------
 
-    /** Demo mode: scripted staging jar/config output (stop/deploy/start per app on the one host). */
+    /** Demo mode: scripted staging jar/config output. Each app runs on its own host — one host
+     *  for core/portal, per-service hosts for npsb-zone (inv.hostFor). */
     public List<Line> script(String group, String host, List<String> apps, List<String> actions,
                              StgInventory inv, String cmd) {
         List<Line> out = new ArrayList<>();
+        java.util.function.Function<String, String> hostOf = app -> {
+            String h = inv.hostFor(group, app);
+            return (h == null || h.isBlank()) ? host : h;
+        };
+        List<String> hosts = apps.stream().map(hostOf).distinct().toList();
+
         out.add(Line.log("user", "$ " + cmd));
         out.add(Line.log("dim", "============================================"));
         out.add(Line.log("dim", " Env     : STAGING"));
         out.add(Line.log("dim", " Group   : " + group));
-        out.add(Line.log("dim", " Limit   : stg-" + group));
+        out.add(Line.log("dim", " Hosts   : " + String.join(",", hosts)));
         out.add(Line.log("dim", " Apps    : " + String.join(",", apps)));
         out.add(Line.log("dim", " Actions : " + String.join(",", actions)));
         out.add(Line.log("dim", "============================================"));
         out.add(Line.log("ink", stars("PLAY [stg-" + group + "]")));
         out.add(Line.log("task", stars("TASK [Gathering Facts]")));
-        out.add(Line.log("ok", "ok: [" + host + "]"));
+        for (String h : hosts) out.add(Line.log("ok", "ok: [" + h + "]"));
 
         for (String a : actions) {
             for (String app : apps) {
+                String h = hostOf.apply(app);
                 String jar = inv.jarFor(group, app).orElse(app + "-1.0.jar");
-                out.add(Line.log("task", stars("TASK [" + a + " : " + app + "]")));
-                long pid = pid("stg" + group + host + app);
+                out.add(Line.log("task", stars("TASK [" + a + " : " + app + " @ " + h + "]")));
+                long pid = pid("stg" + group + h + app);
                 String text = switch (a) {
-                    case "stop" -> "changed: [" + host + "] => " + app + " pid " + pid + " stopped";
-                    case "deploy" -> "changed: [" + host + "] => " + jar
+                    case "stop" -> "changed: [" + h + "] => " + app + " pid " + pid + " stopped";
+                    case "deploy" -> "changed: [" + h + "] => " + jar
                             + " -> /home/" + app + "/was/ (backup: " + jar + ".1753257821~)";
-                    default -> "changed: [" + host + "] => " + app + " started, pid "
-                            + pid("stg" + group + host + app + "n") + " — verified running";
+                    default -> "changed: [" + h + "] => " + app + " started, pid "
+                            + pid("stg" + group + h + app + "n") + " — verified running";
                 };
-                out.add(Line.host("ch", text, host, a, "done"));
+                out.add(Line.host("ch", text, h, a, "done"));
             }
         }
         out.add(Line.log("ink", stars("PLAY RECAP")));
-        int changed = actions.size() * apps.size();
-        out.add(Line.log("ok", pad(host) + ": ok=" + (1 + changed) + "  changed=" + changed
-                + "  unreachable=0  failed=0"));
+        for (String h : hosts) {
+            long appsOnHost = apps.stream().filter(app -> hostOf.apply(app).equals(h)).count();
+            long changed = actions.size() * appsOnHost;
+            out.add(Line.log("ok", pad(h) + ": ok=" + (1 + changed) + "  changed=" + changed
+                    + "  unreachable=0  failed=0"));
+        }
         return out;
     }
 

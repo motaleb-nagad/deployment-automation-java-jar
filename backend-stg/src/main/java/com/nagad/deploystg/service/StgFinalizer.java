@@ -21,12 +21,14 @@ public class StgFinalizer {
     private final DeploymentRepository deployments;
     private final MailService mail;
     private final AuditService audit;
+    private final StgInventory inv;
     private final ObjectMapper json = new ObjectMapper();
 
-    public StgFinalizer(DeploymentRepository deployments, MailService mail, AuditService audit) {
+    public StgFinalizer(DeploymentRepository deployments, MailService mail, AuditService audit, StgInventory inv) {
         this.deployments = deployments;
         this.mail = mail;
         this.audit = audit;
+        this.inv = inv;
     }
 
     @Transactional
@@ -36,7 +38,10 @@ public class StgFinalizer {
         List<Map<String, String>> rows = new ArrayList<>();
         String outcome = String.join(" → ", actions);
         for (String app : apps) {
-            rows.add(Map.of("host", host, "app", app, "before", "staging", "after", outcome,
+            // Per-app host so npsb-zone rows show the right server; single-host groups fall back.
+            String h = inv.hostFor(group, app);
+            if (h == null || h.isBlank()) h = host;
+            rows.add(Map.of("host", h, "app", app, "before", "staging", "after", outcome,
                     "verdict", "changed"));
         }
         deployments.findById(deploymentId).ifPresent(d -> d.complete("ok", "—", serialize(rows), lastLogLine));

@@ -8,8 +8,9 @@ import java.util.List;
 public final class Dtos {
     private Dtos() {}
 
-    /** A staging service the operator can deploy: app key + the jar file the playbook expects. */
-    public record StgAppView(String key, String jar) {}
+    /** A staging service the operator can deploy: app key + jar + the host it lives on (per-app
+     *  for npsb-zone, else the group host). */
+    public record StgAppView(String key, String jar, String host, String ip) {}
 
     /** A staging group (core | portal) with its single host and the apps it deploys. */
     public record StgGroupView(String key, String label, String host, String ip, List<StgAppView> apps) {}

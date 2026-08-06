@@ -19,8 +19,11 @@ import java.util.Optional;
 @Component
 public class StgInventory {
 
-    public record App(String key, String jar) {}
-    public record Group(String key, String label, String host, String ip, Map<String, String> jarMap) {}
+    public record App(String key, String jar, String host, String ip) {}
+    /** {@code appHosts} maps an app → {host, ip} for groups whose services live on different
+     *  hosts (npsb-zone). Empty for single-host groups (core/portal), which use {@code host}/{@code ip}. */
+    public record Group(String key, String label, String host, String ip,
+                        Map<String, String> jarMap, Map<String, String[]> appHosts) {}
 
     /** Portal-UI names the staging portalui/run.sh accepts (each needs a matching {@code <ui>.tar}). */
     public static final List<String> UIS = List.of("system", "dms", "call-center", "operations");
@@ -38,13 +41,24 @@ public class StgInventory {
     public List<App> apps(String groupKey) {
         Group g = groups.get(groupKey);
         if (g == null) return List.of();
-        return g.jarMap().entrySet().stream().map(e -> new App(e.getKey(), e.getValue())).toList();
+        return g.jarMap().entrySet().stream().map(e -> {
+            String[] hp = g.appHosts().getOrDefault(e.getKey(), new String[]{g.host(), g.ip()});
+            return new App(e.getKey(), e.getValue(), hp[0], hp[1]);
+        }).toList();
     }
 
     public Optional<String> jarFor(String groupKey, String app) {
         Group g = groups.get(groupKey);
         if (g == null) return Optional.empty();
         return Optional.ofNullable(g.jarMap().get(app));
+    }
+
+    /** The host an app is deployed to within a group (per-app for npsb-zone, else the group host). */
+    public String hostFor(String groupKey, String app) {
+        Group g = groups.get(groupKey);
+        if (g == null) return "";
+        String[] hp = g.appHosts().get(app);
+        return hp != null ? hp[0] : g.host();
     }
 
     public boolean isValidUi(String ui) {
@@ -54,10 +68,35 @@ public class StgInventory {
     private static Map<String, Group> build() {
         Map<String, Group> g = new LinkedHashMap<>();
         g.put("core", new Group("core", "STG CORE — ngd-dc-core-01",
-                "ngd-dc-core-01", "10.230.1.208", coreJarMap()));
+                "ngd-dc-core-01", "10.230.1.208", coreJarMap(), Map.of()));
         g.put("portal", new Group("portal", "STG PORTAL — ngd-dc-portal-01",
-                "ngd-dc-portal-01", "10.230.1.207", portalJarMap()));
+                "ngd-dc-portal-01", "10.230.1.207", portalJarMap(), Map.of()));
+        // NPSB zone: one service per host across four staging servers.
+        g.put("npsb-zone", new Group("npsb-zone", "STG NPSB ZONE — apigw / spg / png / pp",
+                "npsb-zone", "", npsbJarMap(), npsbHosts()));
         return g;
+    }
+
+    /** jar_map for the NPSB staging zone (npsb-zone). */
+    private static Map<String, String> npsbJarMap() {
+        Map<String, String> j = new LinkedHashMap<>();
+        j.put("apigw", "api-gateway-1.0.jar");
+        j.put("spg", "secure-payment-gateway-1.0.jar");
+        j.put("png", "payment-network-gateway.jar");
+        j.put("pp", "payment-processor-1.0.jar");
+        j.put("npsb_parser", "npsb-parser-1.0.0.jar");
+        return j;
+    }
+
+    /** Per-app staging host for npsb-zone: app → {host, ip}. */
+    private static Map<String, String[]> npsbHosts() {
+        Map<String, String[]> h = new LinkedHashMap<>();
+        h.put("apigw",       new String[]{"npsb-apigw", "10.210.24.211"});
+        h.put("spg",         new String[]{"npsb-spg", "10.220.24.210"});
+        h.put("png",         new String[]{"kona-switch", "10.210.24.136"});
+        h.put("pp",          new String[]{"npsb-pp", "10.220.24.212"});
+        h.put("npsb_parser", new String[]{"npsb-pp", "10.220.24.212"});
+        return h;
     }
 
     /** jar_map from stg-deployment/core.yml (stg-core). */

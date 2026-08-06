@@ -82,7 +82,8 @@ public class StgPropertiesService {
 
         validateArgs(op, req);
 
-        String host = g.host();
+        String host = inv.hostFor(group, app);
+        if (host == null || host.isBlank()) host = g.host();
         String blockPath = runner.blockFilePath(app);
         boolean changed = write && !test;
 

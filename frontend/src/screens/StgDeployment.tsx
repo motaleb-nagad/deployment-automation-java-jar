@@ -81,6 +81,11 @@ export function StgDeployment() {
   const grp = useMemo(() => cat?.groups.find((g) => g.key === group) ?? cat?.groups[0], [cat, group]);
   const portalHost = cat?.groups.find((g) => g.key === 'portal')?.host ?? 'ngd-dc-portal-01';
   const host = channel === 'app' ? (grp?.host ?? '') : portalHost;
+  // Distinct target hosts of the selected apps — one for core/portal, several for npsb-zone.
+  const multiHost = channel === 'app' && !!grp && grp.apps.some((a) => a.host && a.host !== grp.host);
+  const appHosts = channel === 'app'
+    ? [...new Set(apps.map((k) => grp?.apps.find((a) => a.key === k)?.host).filter((h): h is string => !!h))]
+    : [];
 
   const phaseOrder = channel === 'app' ? APP_PHASES : UI_PHASES;
   const selectedPhases = phaseOrder.filter((p) => actions.includes(p));
@@ -103,7 +108,7 @@ export function StgDeployment() {
   // upload needs write (w); running (stop/deploy/start) needs execute (x).
   const canExec = (!actions.includes('upload') || !!me?.w) && (!willRun || !!me?.x);
 
-  const railHosts = [host];
+  const railHosts = appHosts.length > 0 ? appHosts : [host];
 
   function reset() {
     setStep('build'); setApps([]); setActions([...(channel === 'app' ? APP_PHASES : UI_PHASES)]);
@@ -252,7 +257,9 @@ export function StgDeployment() {
                 </div>
                 <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                   {grp?.apps.map((a) => { const on = apps.includes(a.key); return (
-                    <button key={a.key} onClick={() => setApps((p) => toggle(p, a.key))} title={a.jar} style={pill(on, '7px 12px', 11.5)}>{a.key}</button>
+                    <button key={a.key} onClick={() => setApps((p) => toggle(p, a.key))} title={`${a.jar}${multiHost ? ' · ' + a.host : ''}`} style={pill(on, '7px 12px', 11.5)}>
+                      {a.key}{multiHost && <span style={{ fontSize: 9, opacity: 0.6 }}> · {a.host}</span>}
+                    </button>
                   ); })}
                 </div>
               </div>
