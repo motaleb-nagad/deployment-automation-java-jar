@@ -93,7 +93,7 @@ public class StgDeploymentService {
     public StgCatalog catalog() {
         List<StgGroupView> groups = inv.groups().stream().map(g -> new StgGroupView(
                 g.key(), g.label(), g.host(), g.ip(),
-                inv.apps(g.key()).stream().map(a -> new StgAppView(a.key(), a.jar())).toList()
+                inv.apps(g.key()).stream().map(a -> new StgAppView(a.key(), a.jar(), a.host(), a.ip())).toList()
         )).toList();
         return new StgCatalog(groups, StgInventory.UIS, runner.stgDir());
     }
@@ -182,12 +182,16 @@ public class StgDeploymentService {
             }
         }
         StgInventory.Group g = inv.group(group).orElseThrow();
+        // Distinct target hosts for the selected apps — one for core/portal, several for npsb-zone.
+        String hostSummary = req.apps().stream().map(a -> inv.hostFor(group, a))
+                .distinct().collect(java.util.stream.Collectors.joining(","));
+        if (hostSummary.isBlank()) hostSummary = g.host();
         String cmd = runner.command(group, req.apps(), req.actions());
         String id = "STG-" + seq.getAndIncrement();
-        deployments.save(new Deployment(id, null, "stg-" + group, g.host(),
+        deployments.save(new Deployment(id, null, "stg-" + group, hostSummary,
                 String.join(",", req.apps()), String.join(",", req.actions()), actor.username()));
 
-        RunPlan plan = new RunPlan(id, actor.username(), false, group, g.host(),
+        RunPlan plan = new RunPlan(id, actor.username(), false, group, hostSummary,
                 req.apps(), req.actions(), null, null, cmd,
                 runner.script(group, g.host(), req.apps(), req.actions(), inv, cmd), false, false);
         return register(plan);
