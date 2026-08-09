@@ -36,3 +36,36 @@ export const roleMeta: Record<string, { tag: string; bg: string; fg: string; lab
 
 export const statusColor = (s: string) =>
   s === 'stopped' ? C.stop : s === 'unknown' ? C.unk : s === 'warn' ? C.warn : C.run;
+
+// ---- deploy result verdicts ----
+// A run's per-service outcome. `changed`/`unchanged` come from the deploy (jar) phase; the
+// live-state verdicts (running / stopped / not-running / still-running / unverified) come from
+// the independent post-action process check that reads the real process table on the host.
+export type VerdictKind = 'good' | 'bad' | 'warn' | 'neutral';
+export function verdictMeta(v: string): { label: string; kind: VerdictKind } {
+  switch (v) {
+    case 'running': return { label: 'RUNNING', kind: 'good' };
+    case 'stopped': return { label: 'STOPPED', kind: 'good' };
+    case 'changed': return { label: 'CHANGED', kind: 'good' };
+    case 'unchanged': return { label: 'UNCHANGED', kind: 'neutral' };
+    case 'not-running': return { label: 'NOT RUNNING', kind: 'bad' };
+    case 'still-running': return { label: 'STILL RUNNING', kind: 'bad' };
+    case 'unverified': return { label: 'UNVERIFIED', kind: 'warn' };
+    case 'skipped': return { label: 'SKIPPED', kind: 'warn' };
+    default: return { label: (v || '').toUpperCase(), kind: 'neutral' };
+  }
+}
+/** A hard live-state failure — the service did not reach the intended end-state. */
+export const verdictBad = (v: string) => v === 'not-running' || v === 'still-running';
+/** Worth offering a one-click retry: a hard failure, or a state we could not confirm. */
+export const verdictNeedsRetry = (v: string) => verdictBad(v) || v === 'unverified';
+
+/** Badge colours for a verdict kind (background / text / optional border). */
+export function verdictStyle(kind: VerdictKind): { background: string; color: string; border: string } {
+  switch (kind) {
+    case 'good': return { background: C.run, color: C.inkOnGreen, border: 'none' };
+    case 'bad': return { background: C.stop, color: 'var(--color-neutral-100)', border: 'none' };
+    case 'warn': return { background: 'transparent', color: C.warn, border: `1px solid ${C.warn}` };
+    default: return { background: 'transparent', color: 'var(--color-neutral-500)', border: '1px solid var(--color-neutral-700)' };
+  }
+}

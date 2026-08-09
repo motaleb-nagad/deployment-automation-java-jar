@@ -51,6 +51,13 @@ public class AnsibleRunner {
     private final String sshKeyPath;
     private final boolean strictHostKey;
 
+    // Post-action process verification (read-only) — how long to wait for a JVM to come up on
+    // start / drain on stop, and how often to re-read the process table in between.
+    private final boolean verifyEnabled;
+    private final int verifyStartTimeout;
+    private final int verifyStopTimeout;
+    private final int verifyInterval;
+
     // The mounted key is copied once to a process-owned 600 file so ssh's ownership/mode
     // check passes regardless of how the key is mounted into the container.
     private volatile Path readyKey;
@@ -62,7 +69,11 @@ public class AnsibleRunner {
             @Value("${nagad.ansible.ssh.port:40167}") int sshPort,
             @Value("${nagad.ansible.ssh.user:konasl}") String sshUser,
             @Value("${nagad.ansible.ssh.key:/run/secrets/deploy_key}") String sshKeyPath,
-            @Value("${nagad.ansible.ssh.strict-host-key-checking:false}") boolean strictHostKey) {
+            @Value("${nagad.ansible.ssh.strict-host-key-checking:false}") boolean strictHostKey,
+            @Value("${nagad.verify.enabled:true}") boolean verifyEnabled,
+            @Value("${nagad.verify.start-timeout-seconds:180}") int verifyStartTimeout,
+            @Value("${nagad.verify.stop-timeout-seconds:45}") int verifyStopTimeout,
+            @Value("${nagad.verify.interval-seconds:6}") int verifyInterval) {
         this.workingDir = workingDir;
         this.portalUiDir = portalUiDir;
         this.sshHost = sshHost;
@@ -70,7 +81,14 @@ public class AnsibleRunner {
         this.sshUser = sshUser;
         this.sshKeyPath = sshKeyPath;
         this.strictHostKey = strictHostKey;
+        this.verifyEnabled = verifyEnabled;
+        this.verifyStartTimeout = verifyStartTimeout;
+        this.verifyStopTimeout = verifyStopTimeout;
+        this.verifyInterval = verifyInterval;
     }
+
+    /** Whether post-action process verification is switched on (nagad.verify.enabled). */
+    public boolean verifyEnabled() { return verifyEnabled; }
 
     public String command(String cmd, List<String> hosts, List<String> apps, List<String> actions) {
         // No -K: the managed deploy playbooks run with become: false, so runs are non-interactive.
@@ -339,6 +357,139 @@ public class AnsibleRunner {
             throw new IOException("jump-host command timed out after " + timeoutSeconds + "s");
         }
         return out.toString();
+    }
+
+    // ---- post-action process verification (read-only) ---------------------------------------
+
+    /** One service to confirm on its host after a stop/start: the Linux service user (the app
+     *  key, matching {@code /home/<app>/was}), the jar it runs, and the SHORT host name used on
+     *  the rail/rows (the ansible inventory name is derived by prefixing {@code nagad-}). */
+    public record VerifyTarget(String app, String jar, String host) {}
+
+    /** Live process-table reading for one target: whether a JVM for its jar is running, the pid
+     *  count seen, and whether the host could be read at all ({@code reached=false} → unverified). */
+    public record ProcState(String app, String host, boolean running, int pids, boolean reached) {}
+
+    /**
+     * After a stop/start run, independently read the live process table on each target host and
+     * confirm the service really is up ({@code expectRunning=true}) or really is gone. Ansible's
+     * {@code changed: … started} line only means the start command fired — a slow JVM may still be
+     * coming up (or already dead) — so this polls {@code ps -u <app>} for the jar with backoff up
+     * to a bounded deadline and streams a VERIFY task plus per-host ok/fatal lines to the console.
+     * Purely read-only: it never touches the service. Returns {@code host:app -> ProcState}.
+     * Real mode only.
+     */
+    public Map<String, ProcState> verifyProcesses(List<VerifyTarget> targets, boolean expectRunning,
+                                                  Consumer<Line> sink) throws IOException, InterruptedException {
+        Map<String, ProcState> state = new LinkedHashMap<>();
+        if (targets == null || targets.isEmpty()) return state;
+
+        int timeout = expectRunning ? verifyStartTimeout : verifyStopTimeout;
+        String what = expectRunning ? "started" : "stopped";
+        sink.accept(Line.log("task", stars("TASK [verify : confirm " + what
+                + " on host — reading process table (up to " + timeout + "s)]")));
+        for (VerifyTarget t : targets) {
+            sink.accept(Line.host("task", "verifying " + t.app() + " on " + t.host() + "…",
+                    t.host(), "verify", "active"));
+        }
+
+        Map<String, List<VerifyTarget>> byHost = new LinkedHashMap<>();
+        for (VerifyTarget t : targets) byHost.computeIfAbsent(t.host(), h -> new ArrayList<>()).add(t);
+
+        long deadline = System.nanoTime() + timeout * 1_000_000_000L;
+        while (true) {
+            boolean allSettled = true;
+            for (var e : byHost.entrySet()) {
+                Map<String, Integer> counts = readProcCounts(e.getKey(), e.getValue());
+                for (VerifyTarget t : e.getValue()) {
+                    Integer c = counts.get(t.app());
+                    boolean reached = c != null;
+                    int pids = c == null ? 0 : c;
+                    boolean running = pids > 0;
+                    state.put(t.host() + ":" + t.app(), new ProcState(t.app(), t.host(), running, pids, reached));
+                    if (!(reached && (expectRunning ? running : !running))) allSettled = false;
+                }
+            }
+            if (allSettled || System.nanoTime() >= deadline) break;
+            for (ProcState s : state.values()) {
+                if (!(s.reached() && (expectRunning ? s.running() : !s.running()))) {
+                    sink.accept(Line.log("dim", "  … " + s.app() + " @ " + s.host()
+                            + (s.reached() ? " " + s.pids() + " proc" : " (host not read yet)") + " — waiting"));
+                }
+            }
+            long remainingMs = (deadline - System.nanoTime()) / 1_000_000L;
+            long sleep = Math.min(verifyInterval * 1000L, remainingMs);
+            if (sleep <= 0) break;
+            Thread.sleep(sleep);
+        }
+
+        for (VerifyTarget t : targets) {
+            ProcState s = state.getOrDefault(t.host() + ":" + t.app(),
+                    new ProcState(t.app(), t.host(), false, 0, false));
+            if (!s.reached()) {
+                sink.accept(Line.host("ch", "UNVERIFIED: [" + t.host() + "] => " + t.app()
+                        + " — could not read the process table on host", t.host(), "verify", "fail"));
+            } else if (expectRunning ? s.running() : !s.running()) {
+                sink.accept(Line.host("ok", expectRunning
+                        ? "ok: [" + t.host() + "] => " + t.app() + " RUNNING (" + s.pids()
+                            + " proc) — verified on host"
+                        : "ok: [" + t.host() + "] => " + t.app() + " STOPPED (no process) — verified on host",
+                        t.host(), "verify", "done"));
+            } else {
+                sink.accept(Line.host("fatal", expectRunning
+                        ? "fatal: [" + t.host() + "] => " + t.app() + " NOT RUNNING after " + timeout
+                            + "s — no process found on host"
+                        : "fatal: [" + t.host() + "] => " + t.app() + " STILL RUNNING (" + s.pids()
+                            + " proc) after " + timeout + "s",
+                        t.host(), "verify", "fail"));
+            }
+        }
+        return state;
+    }
+
+    /** Read the JVM pid count of each target app on one host via a single ad-hoc ansible shell —
+     *  {@code ps -u <app> -o args= | grep -F <jar>}, scoped to the dedicated service user so
+     *  co-located services that share a jar name stay distinct. Returns app → count; an app
+     *  absent from the map means the host/command could not be read (→ unverified). */
+    private Map<String, Integer> readProcCounts(String host, List<VerifyTarget> targets)
+            throws IOException, InterruptedException {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        if (host == null || host.isBlank()) return out;
+        StringBuilder script = new StringBuilder();
+        for (VerifyTarget t : targets) {
+            script.append("c=$(ps -u ").append(shq(t.app())).append(" -o args= 2>/dev/null | grep -F -- ")
+                  .append(shq(t.jar())).append(" | wc -l); printf '__PROC__%s\\t%s\\n' ")
+                  .append(shq(t.app())).append(" \"$c\"; ");
+        }
+        String remote = "cd " + shq(workingDir) + " && ansible " + shq(inventoryName(host))
+                + " -m shell -a " + shq(script.toString()) + " 2>&1";
+        String raw;
+        try {
+            raw = capture(remote, 60);
+        } catch (IOException | InterruptedException ex) {
+            if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
+            return out; // host unreachable / command failed — leave every app unread (unverified)
+        }
+        if (raw == null) return out;
+        for (String line : raw.split("\n")) {
+            String t = line.trim();
+            if (t.startsWith("__PROC__")) {
+                int tab = t.indexOf('\t');
+                if (tab > 8) {
+                    String app = t.substring("__PROC__".length(), tab).trim();
+                    try { out.put(app, Integer.parseInt(t.substring(tab + 1).trim())); }
+                    catch (NumberFormatException ignore) { /* skip malformed */ }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The ansible inventory name for a UI/rail host — prefixes {@code nagad-} (deploy.sh's
+     *  resolve_host convention) unless the name already carries it. */
+    private static String inventoryName(String host) {
+        String h = host.trim();
+        return h.startsWith("nagad-") ? h : "nagad-" + h;
     }
 
     /**

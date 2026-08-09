@@ -302,13 +302,19 @@ public class StgDeploymentService {
     private void runStream(RunPlan plan, SseEmitter emitter) {
         try {
             String lastLog = simulate ? streamScripted(plan, emitter) : streamReal(plan, emitter);
+
+            // Independent post-action verification: read the real process table on each staging
+            // host and confirm the service actually reached the expected state (start → running,
+            // stop-only → stopped) — so the console's confirmation is truthful for slow services.
+            Map<String, String> verdicts = verifyRun(plan, emitter);
+
             List<Map<String, String>> rows = plan.portalUi()
                     ? finalizer.commitPortalUi(plan.deploymentId(), plan.actor(), plan.host(),
                         plan.uis(), plan.date(), plan.cmd(), lastLog)
                     : finalizer.commit(plan.deploymentId(), plan.actor(), plan.group(), plan.host(),
-                        plan.apps(), plan.actions(), plan.cmd(), lastLog);
+                        plan.apps(), plan.actions(), plan.cmd(), lastLog, verdicts);
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
-                    "deploymentId", plan.deploymentId(), "result", "ok", "rows", rows)));
+                    "deploymentId", plan.deploymentId(), "result", StgFinalizer.resultOf(verdicts), "rows", rows)));
             emitter.complete();
         } catch (Exception e) {
             log.warn("stg deploy stream {} failed: {}", plan.deploymentId(), e.toString());
@@ -357,6 +363,67 @@ public class StgDeploymentService {
             emitter.send(SseEmitter.event().name("host").data(Map.of(
                     "host", ln.railHost(), "action", ln.railAction(), "state", ln.railState())));
         }
+    }
+
+    /**
+     * Confirm the real post-run state of every staging service on its host and return {@code
+     * host:app → verdict} (running / not-running / stopped / still-running / unverified). Runs only
+     * when the run had a stop or start phase (a deploy-only run changes no run state) and never for
+     * a portal-UI run (static files, no process). Streams the check to the console. Read-only — it
+     * never touches a service; a bad verdict is reported, not remediated.
+     */
+    private Map<String, String> verifyRun(RunPlan plan, SseEmitter emitter) {
+        if (plan.portalUi() || !runner.verifyEnabled()) return Map.of();
+        boolean hasStart = plan.actions().contains("start");
+        boolean hasStop = plan.actions().contains("stop");
+        if (!hasStart && !hasStop) return Map.of();
+        boolean expectRunning = hasStart; // stop→deploy→start ends running; stop-only ends stopped
+
+        List<StgAnsibleRunner.VerifyTarget> targets = new ArrayList<>();
+        for (String app : plan.apps()) {
+            String h = inv.hostFor(plan.group(), app);
+            if (h == null || h.isBlank()) h = plan.host();
+            String jar = inv.jarFor(plan.group(), app).orElse(app + "-1.0.jar");
+            targets.add(new StgAnsibleRunner.VerifyTarget(app, jar, h));
+        }
+        if (targets.isEmpty()) return Map.of();
+
+        Consumer<Line> sink = ln -> {
+            try { sendLine(emitter, ln); } catch (IOException e) { throw new UncheckedIOException(e); }
+        };
+
+        Map<String, String> verdicts = new LinkedHashMap<>();
+        if (simulate) {
+            // Demo mode: no SSH — synthesise a verified-good outcome so the mechanism is visible.
+            String good = expectRunning ? "running" : "stopped";
+            sink.accept(Line.log("task", "TASK [verify : confirm " + (expectRunning ? "started" : "stopped")
+                    + " on host — reading process table] " + "*".repeat(20)));
+            for (StgAnsibleRunner.VerifyTarget t : targets) {
+                verdicts.put(t.host() + ":" + t.app(), good);
+                sink.accept(new Line("ok", "ok: [" + t.host() + "] => " + t.app() + " "
+                        + good.toUpperCase() + " — verified on host", t.host(), "verify", "done"));
+            }
+            return verdicts;
+        }
+        try {
+            Map<String, StgAnsibleRunner.ProcState> state = runner.verifyProcesses(targets, expectRunning, sink);
+            for (StgAnsibleRunner.VerifyTarget t : targets) {
+                verdicts.put(t.host() + ":" + t.app(),
+                        verdictOf(state.get(t.host() + ":" + t.app()), expectRunning));
+            }
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("stg post-run verification failed for {}: {}", plan.deploymentId(), e.toString());
+            for (StgAnsibleRunner.VerifyTarget t : targets) verdicts.put(t.host() + ":" + t.app(), "unverified");
+        }
+        return verdicts;
+    }
+
+    /** Map a raw process reading to a row verdict for the intended end-state. */
+    private static String verdictOf(StgAnsibleRunner.ProcState s, boolean expectRunning) {
+        if (s == null || !s.reached()) return "unverified";
+        if (expectRunning) return s.running() ? "running" : "not-running";
+        return s.running() ? "still-running" : "stopped";
     }
 
     /** SHA-256 of the uploaded bytes, as lower-case hex — the hash of the jar/config/tar we stage. */
