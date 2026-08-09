@@ -30,6 +30,57 @@ async function sha256File(file: File): Promise<string> {
 const shortHash = (h: string) => (h ? h.slice(0, 12) + '…' + h.slice(-8) : '');
 
 /**
+ * Read `git.commit.id.abbrev` out of a Spring Boot jar entirely in the browser, so the git
+ * commit hash of the jar being uploaded is shown up-front — the SAME value the DEPLOYED HASHES
+ * board reads from the live jar on the host, so they compare directly. A jar is a zip: we walk
+ * its central directory to find BOOT-INF/classes/git.properties, then inflate that one entry
+ * (stored or deflated). Returns '' if the jar carries no git.properties or can't be parsed
+ * (Zip64 archives are not handled — Spring Boot jars are well under those limits).
+ */
+async function jarGitHash(file: File): Promise<string> {
+  try {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const dv = new DataView(buf.buffer);
+    const dec = new TextDecoder();
+    // Locate the End Of Central Directory record (0x06054b50), scanning back over any trailing comment.
+    let eocd = -1;
+    const min = Math.max(0, buf.length - 22 - 65535);
+    for (let i = buf.length - 22; i >= min; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+    if (eocd < 0) return '';
+    let p = dv.getUint32(eocd + 16, true);      // central directory offset
+    const count = dv.getUint16(eocd + 10, true); // total central-directory entries
+    const target = 'BOOT-INF/classes/git.properties';
+    for (let n = 0; n < count; n++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) break; // central file header signature
+      const method = dv.getUint16(p + 10, true);
+      const compSize = dv.getUint32(p + 20, true);
+      const nameLen = dv.getUint16(p + 28, true);
+      const extraLen = dv.getUint16(p + 30, true);
+      const commentLen = dv.getUint16(p + 32, true);
+      const localOff = dv.getUint32(p + 42, true);
+      const name = dec.decode(buf.subarray(p + 46, p + 46 + nameLen));
+      if (name === target) {
+        const lNameLen = dv.getUint16(localOff + 26, true);
+        const lExtraLen = dv.getUint16(localOff + 28, true);
+        const dataStart = localOff + 30 + lNameLen + lExtraLen;
+        const comp = buf.subarray(dataStart, dataStart + compSize);
+        let text: string;
+        if (method === 0) {
+          text = dec.decode(comp);
+        } else {
+          const stream = new Blob([comp]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+          text = dec.decode(await new Response(stream).arrayBuffer());
+        }
+        const m = text.match(/git\.commit\.id\.abbrev=([^\r\n]+)/);
+        return m ? m[1].trim() : '';
+      }
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    return '';
+  } catch { return ''; }
+}
+
+/**
  * The STAGING deployment console (maps to /stg-deployment). Upload-driven: files are selected
  * in the build step and only staged onto the jump host when you EXECUTE — as the first phase —
  * followed by the stop/deploy/start (or portal-ui deploy) run. `upload` is a first-class,
@@ -57,6 +108,9 @@ export function StgDeployment() {
   const [tarFile, setTarFile] = useState<Record<string, File>>({});
   // SHA-256 of each chosen file, keyed by `${kind}:${target}` ('' while still hashing).
   const [fileHash, setFileHash] = useState<Record<string, string>>({});
+  // git.commit.id.abbrev read from each chosen jar, keyed by app ('' while still reading,
+  // 'none' when the jar carries no git.properties).
+  const [jarGit, setJarGit] = useState<Record<string, string>>({});
 
   const [lines, setLines] = useState<TermLine[]>([]);
   const [rail, setRail] = useState<Record<string, Record<string, string>>>({});
@@ -76,6 +130,13 @@ export function StgDeployment() {
     sha256File(f)
       .then((h) => setFileHash((p) => ({ ...p, [`${kind}:${target}`]: h })))
       .catch(() => setFileHash((p) => ({ ...p, [`${kind}:${target}`]: 'unavailable' })));
+    // For a jar, also read its embedded git commit hash so it shows the moment the file is chosen.
+    if (kind === 'jar') {
+      setJarGit((p) => ({ ...p, [target]: '' }));
+      jarGitHash(f)
+        .then((h) => setJarGit((p) => ({ ...p, [target]: h || 'none' })))
+        .catch(() => setJarGit((p) => ({ ...p, [target]: 'none' })));
+    }
   }
 
   const grp = useMemo(() => cat?.groups.find((g) => g.key === group) ?? cat?.groups[0], [cat, group]);
@@ -115,13 +176,13 @@ export function StgDeployment() {
 
   function reset() {
     setStep('build'); setApps([]); setActions([...(channel === 'app' ? APP_PHASES : UI_PHASES)]);
-    setUis([]); setDate(''); setUrlFix(false); setSizeFix(false); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({});
+    setUis([]); setDate(''); setUrlFix(false); setSizeFix(false); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({}); setJarGit({});
     setLines([]); setRail({}); setResult([]); setDone(false);
   }
 
   function switchChannel(c: Channel) {
     setChannel(c); setStep('build'); setActions([...(c === 'app' ? APP_PHASES : UI_PHASES)]);
-    setApps([]); setUis([]); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({});
+    setApps([]); setUis([]); setJarFile({}); setCfgFile({}); setTarFile({}); setFileHash({}); setJarGit({});
   }
 
   const appendLine = (level: string, text: string) => setLines((p) => [...p, { level, text }]);
@@ -148,7 +209,7 @@ export function StgDeployment() {
         appendLine('user', `$ stage files -> ${cat?.workingDir ?? 'stg-deployment'}`);
         if (channel === 'app') {
           for (const a of apps) {
-            if (jarFile[a]) { const r = await stageOne('jar', a, jarFile[a]); staged.push({ host, app: a, before: '-', after: `jar staged (${r.storedName})`, verdict: 'changed' }); }
+            if (jarFile[a]) { const r = await stageOne('jar', a, jarFile[a]); const g = jarGit[a] && jarGit[a] !== 'none' && jarGit[a] !== '' ? ` · git ${jarGit[a]}` : ''; staged.push({ host, app: a, before: '-', after: `jar staged${g} (${r.storedName})`, verdict: 'changed' }); }
             if (cfgFile[a]) { const r = await stageOne('cfg', a, cfgFile[a]); staged.push({ host, app: a, before: '-', after: `config staged (${r.storedName})`, verdict: 'changed' }); }
           }
         } else {
@@ -297,8 +358,16 @@ export function StgDeployment() {
                     {apps.map((a) => {
                       const jar = grp?.apps.find((x) => x.key === a)?.jar ?? '';
                       return (
-                        <div key={a} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr', gap: 12, padding: '10px 2px', borderBottom: rule1, alignItems: 'center' }}>
-                          <div style={{ fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)' }}>{a}<div style={{ fontSize: 9.5, color: 'var(--color-neutral-500)' }}>{jar}</div></div>
+                        <div key={a} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr', gap: 12, padding: '10px 2px', borderBottom: rule1, alignItems: 'center' }}>
+                          <div style={{ fontFamily: mono, fontSize: 12.5, color: 'var(--color-neutral-100)' }}>
+                            {a}
+                            {jarFile[a] && (jarGit[a] === undefined || jarGit[a] === ''
+                              ? <span style={{ fontSize: 10.5, color: 'var(--color-neutral-500)' }}> · git…</span>
+                              : jarGit[a] === 'none'
+                                ? <span style={{ fontSize: 10.5, color: C.warn }}> · no git hash</span>
+                                : <span style={{ fontSize: 11, color: 'var(--color-accent-400)' }} title="git.commit.id.abbrev of the chosen jar"> · {jarGit[a]}</span>)}
+                            <div style={{ fontSize: 9.5, color: 'var(--color-neutral-500)' }}>{jar}</div>
+                          </div>
                           <FileCell label="jar" required file={jarFile[a]} hash={fileHash[`jar:${a}`]} onPick={(f) => pick('jar', a, setJarFile, f)} disabled={!me?.w} />
                           <FileCell label="application.properties" required={false} file={cfgFile[a]} hash={fileHash[`cfg:${a}`]} onPick={(f) => pick('cfg', a, setCfgFile, f)} disabled={!me?.w} />
                         </div>
@@ -408,7 +477,7 @@ export function StgDeployment() {
     const fileRows: FileRow[] = channel === 'app'
       ? apps.flatMap((a) => {
           const r: FileRow[] = [];
-          if (jarFile[a]) r.push({ label: `${a} · jar`, name: jarFile[a].name, hash: fileHash[`jar:${a}`] });
+          if (jarFile[a]) r.push({ label: `${a} · jar${jarGit[a] && jarGit[a] !== 'none' && jarGit[a] !== '' ? ' · git ' + jarGit[a] : ''}`, name: jarFile[a].name, hash: fileHash[`jar:${a}`] });
           if (cfgFile[a]) r.push({ label: `${a} · config`, name: cfgFile[a].name, hash: fileHash[`cfg:${a}`] });
           return r;
         })
