@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, openDeployStream, uploadFile, type ResultRow } from '../api/client';
 import { useApp } from '../store/app';
-import { C, rule1, rule2, TERM } from '../theme/colors';
+import { C, rule1, rule2, TERM, verdictMeta, verdictStyle, verdictBad, verdictNeedsRetry } from '../theme/colors';
 import type { StgCatalog, StgUploadResponse, StgServiceHash } from '../api/types';
 import { StgProperties } from './StgProperties';
 import { StgHistory } from './StgHistory';
@@ -90,6 +90,9 @@ export function StgDeployment() {
   const phaseOrder = channel === 'app' ? APP_PHASES : UI_PHASES;
   const selectedPhases = phaseOrder.filter((p) => actions.includes(p));
   const runActions = actions.filter((a) => RUN_ACTIONS.has(a));
+  // The post-action process check gets its own rail column whenever a run has a stop/start phase.
+  const showVerify = channel === 'app' && (runActions.includes('start') || runActions.includes('stop'));
+  const railPhases = showVerify ? [...selectedPhases, 'verify'] : selectedPhases;
 
   const runCmd = channel === 'app'
     ? `./run.sh ${group} all ${apps.join(',') || '<apps>'} ${runActions.join(',')}`
@@ -175,6 +178,27 @@ export function StgDeployment() {
     } catch (e) {
       flash(e instanceof ApiError ? e.message : 'staging run failed', C.stop);
       setDone(true);
+    }
+  }
+
+  // One-click retry of a single service that failed verification — re-runs just the intended
+  // run-state action (start, or stop for a stop-only run) for that app, which re-verifies on
+  // completion. No automatic remediation: the operator clicks this deliberately.
+  async function retry(row: ResultRow) {
+    const action = runActions.includes('start') ? 'start' : 'stop';
+    setStep('running'); setLines([]); setRail({}); setResult([]); setDone(false);
+    try {
+      const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>(
+        '/stg/deploy', { group, apps: [row.app], actions: [action] });
+      openDeployStream(streamTicket, {
+        onLine: (l) => setLines((p) => [...p, l]),
+        onHost: (h) => setRail((p) => ({ ...p, [h.host]: { ...(p[h.host] ?? {}), [h.action]: h.state } })),
+        onComplete: (c) => { setResult(c.rows); setDone(true); qc.invalidateQueries(); },
+        onError: (m) => { flash(m, C.stop); setDone(true); },
+      }, '/stg/stream');
+    } catch (e) {
+      flash(e instanceof ApiError ? e.message : 'retry failed', C.stop);
+      setStep('result');
     }
   }
 
@@ -470,12 +494,12 @@ export function StgDeployment() {
               {railHosts.map((h) => (
                 <div key={h} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: rule1, flexWrap: 'wrap' }}>
                   <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-100)', width: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>{h}</div>
-                  {selectedPhases.map((a) => { const st = rail[h]?.[a] ?? 'pending';
-                    const bg = st === 'done' ? C.run : st === 'active' ? C.warn : 'transparent';
+                  {railPhases.map((a) => { const st = rail[h]?.[a] ?? 'pending';
+                    const bg = st === 'done' ? C.run : st === 'fail' ? C.stop : st === 'active' ? C.warn : 'transparent';
                     const bd = st === 'pending' ? '1px solid var(--color-neutral-600)' : '1px solid transparent';
                     return <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       <div style={{ width: 10, height: 10, background: bg, border: bd, animation: st === 'active' ? 'pulse 1s infinite' : 'none' }} />
-                      <span style={{ fontFamily: mono, fontSize: 9.5, color: 'var(--color-neutral-500)' }}>{a}</span></div>;
+                      <span style={{ fontFamily: mono, fontSize: 9.5, color: a === 'verify' ? 'var(--color-neutral-300)' : 'var(--color-neutral-500)' }}>{a}</span></div>;
                   })}
                 </div>
               ))}
@@ -488,30 +512,57 @@ export function StgDeployment() {
         </>
       )}
 
-      {step === 'result' && (
-        <div style={{ maxWidth: 1000 }}>
+      {step === 'result' && (() => {
+        const incident = result.some((r) => verdictBad(r.verdict));
+        const unverified = result.some((r) => r.verdict === 'unverified');
+        const retryAction = runActions.includes('start') ? 'start' : 'stop';
+        const cols = '160px 170px 1fr 118px 96px';
+        return (
+        <div style={{ maxWidth: 1040 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '20px 0 14px' }}>
-            <div style={{ width: 14, height: 14, background: C.run }} />
-            <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Completed — staging</h3>
+            <div style={{ width: 14, height: 14, background: incident ? C.stop : C.run }} />
+            <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>{incident ? 'Incident — staging' : 'Completed — staging'}</h3>
             <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-400)' }}>{selectedPhases.join(' → ')}</div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '180px 200px 1fr 120px', gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
-            <div>HOST</div><div>{channel === 'app' ? 'SERVICE' : 'UI'}</div><div>OUTCOME</div><div>RESULT</div>
+          {incident && (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: 12, marginBottom: 14, borderLeft: `3px solid ${C.stop}`, background: 'color-mix(in srgb, var(--color-accent-500) 10%, transparent)' }}>
+              <div style={{ width: 10, height: 10, background: C.stop, marginTop: 3, flex: 'none' }} />
+              <div style={{ fontSize: 12.5, color: 'var(--color-neutral-200)' }}>
+                <strong style={{ fontFamily: 'var(--font-heading)', fontSize: 10, letterSpacing: '.12em', color: C.stop }}>INCIDENT — STATE NOT CONFIRMED</strong><br />
+                Ansible reported success, but reading the process table on the host shows {result.filter((r) => verdictBad(r.verdict)).length} service(s) did not reach the expected state. Nothing was changed on the server on your behalf — retry the service or investigate on the host.
+              </div>
+            </div>
+          )}
+          {!incident && unverified && (
+            <div style={{ fontSize: 12, color: C.warn, marginBottom: 12 }}>Some services could not be verified (host unreadable). Their live state is unconfirmed — check the host or retry.</div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
+            <div>HOST</div><div>{channel === 'app' ? 'SERVICE' : 'UI'}</div><div>OUTCOME</div><div>RESULT</div><div />
           </div>
-          {result.map((rw, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '180px 200px 1fr 120px', gap: 12, padding: 8, borderBottom: rule1, fontFamily: mono, fontSize: 12, alignItems: 'center' }}>
+          {result.map((rw, i) => {
+            const vm = verdictMeta(rw.verdict); const vs = verdictStyle(vm.kind);
+            return (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: 8, borderBottom: rule1, fontFamily: mono, fontSize: 12, alignItems: 'center' }}>
               <div style={{ color: 'var(--color-neutral-100)' }}>{rw.host}</div>
               <div style={{ color: 'var(--color-neutral-300)' }}>{rw.app}</div>
               <div style={{ color: 'var(--color-neutral-300)' }}>{rw.after}</div>
-              <div style={{ justifySelf: 'start', padding: '2px 8px', background: rw.verdict === 'changed' ? C.run : 'transparent', color: rw.verdict === 'changed' ? C.inkOnGreen : 'var(--color-neutral-500)', border: rw.verdict === 'changed' ? 'none' : '1px solid var(--color-neutral-700)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9.5, letterSpacing: '.1em' }}>{rw.verdict === 'changed' ? 'DONE' : rw.verdict.toUpperCase()}</div>
+              <div style={{ justifySelf: 'start', padding: '2px 8px', background: vs.background, color: vs.color, border: vs.border, fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9.5, letterSpacing: '.1em' }}>{vm.label}</div>
+              <div>
+                {channel === 'app' && verdictNeedsRetry(rw.verdict) && me?.x && (
+                  <button onClick={() => retry(rw)} title={`Re-run ${retryAction} for ${rw.app}`}
+                    style={{ border: `1px solid ${C.stop}`, background: 'transparent', color: C.stop, cursor: 'pointer', padding: '3px 9px', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>
+                    RETRY {retryAction.toUpperCase()}
+                  </button>
+                )}
+              </div>
             </div>
-          ))}
+          ); })}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 18 }}>
             <button onClick={reset} style={editBtn}>NEW ACTION</button>
             <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)' }}>Report emailed to devops-team@nagad.com.bd · logged to the audit trail.</div>
           </div>
         </div>
-      )}
+      ); })()}
     </main>
   );
 }

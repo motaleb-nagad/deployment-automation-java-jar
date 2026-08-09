@@ -68,6 +68,20 @@ nagad:
       command: ${FLEET_STATUS_CMD:./fleet-status.sh}
       timeout-seconds: ${FLEET_TIMEOUT:60}
       ttl-seconds: ${FLEET_TTL:180}
+  # Post-action process verification. After a stop/start run the console independently reads the
+  # live process table on each target host (ps -u <service-user> for the app's jar) and confirms
+  # the service actually reached the expected state — Ansible's "started" only means the start
+  # command fired, which is not the same as a slow JVM being up. Read-only: it never restarts,
+  # kills or rolls anything back; a bad result is flagged as an INCIDENT for a human to act on.
+  verify:
+    enabled: ${VERIFY_ENABLED:true}
+    # How long to keep re-checking before giving up. The poll settles as soon as a service reaches
+    # the expected state, so a fast service never waits the full window — this is only the ceiling
+    # before a still-down service is declared not-running. Give start plenty of headroom for a
+    # slow JVM to bind; raise it further for the heaviest services. interval is the gap between reads.
+    start-timeout-seconds: ${VERIFY_START_TIMEOUT:180}
+    stop-timeout-seconds: ${VERIFY_STOP_TIMEOUT:45}
+    interval-seconds: ${VERIFY_INTERVAL:6}
   mail:
     relay: ${MAIL_RELAY:10.210.2.16:25}
     from: no-reply@nagad.com.bd

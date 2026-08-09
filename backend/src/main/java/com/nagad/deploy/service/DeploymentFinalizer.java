@@ -46,13 +46,38 @@ public class DeploymentFinalizer {
         this.prodHash = prodHash;
     }
 
+    /**
+     * The overall run result from the post-action process verdicts: {@code incident} when any
+     * service failed to reach its expected state (start left it down, or stop left it up),
+     * otherwise {@code ok}. {@code unverified} rows are surfaced per-row but do not, on their
+     * own, mark the whole run an incident.
+     */
+    public static String resultOf(Map<String, String> stateVerdicts) {
+        if (stateVerdicts == null) return "ok";
+        boolean incident = stateVerdicts.values().stream()
+                .anyMatch(v -> "not-running".equals(v) || "still-running".equals(v));
+        return incident ? "incident" : "ok";
+    }
+
+    /** The host:app keys whose live-state verdict is a hard failure — used to flag the audit/mail. */
+    private static List<String> failures(Map<String, String> stateVerdicts) {
+        List<String> out = new ArrayList<>();
+        if (stateVerdicts == null) return out;
+        stateVerdicts.forEach((k, v) -> {
+            if ("not-running".equals(v) || "still-running".equals(v)) out.add(k + " (" + v + ")");
+        });
+        return out;
+    }
+
     @Transactional
     public List<Map<String, String>> commit(String deploymentId, String actor, String groupCmd,
                                             List<String> hosts, List<String> apps, List<String> actions,
-                                            String cmd, String lastLogLine, Map<String, String> beforeHashes) {
+                                            String cmd, String lastLogLine, Map<String, String> beforeHashes,
+                                            Map<String, String> stateVerdicts) {
         List<Map<String, String>> rows = new ArrayList<>();
         boolean isDeploy = actions.contains("deploy");
         Map<String, String> before0 = beforeHashes == null ? Map.of() : beforeHashes;
+        Map<String, String> verdicts = stateVerdicts == null ? Map.of() : stateVerdicts;
 
         for (String app : apps) {
             // "before" is the pre-run snapshot captured at start(); fall back to a live read.
@@ -74,17 +99,25 @@ public class DeploymentFinalizer {
                 }
             }
             for (String h : hosts) {
-                rows.add(Map.of("host", h, "app", app, "before", before, "after", after,
-                        "verdict", before.equals(after) ? "unchanged" : "changed"));
+                // When the run had a stop/start phase the badge reports the verified live state
+                // (running / stopped / not-running / …); the hash change stays in before→after.
+                String verdict = verdicts.getOrDefault(h + ":" + app,
+                        before.equals(after) ? "unchanged" : "changed");
+                rows.add(Map.of("host", h, "app", app, "before", before, "after", after, "verdict", verdict));
             }
         }
 
         String finalAfter = rows.isEmpty() ? "-" : rows.get(rows.size() - 1).get("after");
+        String result = resultOf(verdicts);
+        List<String> failed = failures(verdicts);
+        String incidentNote = failed.isEmpty() ? "" : " — INCIDENT: " + String.join(", ", failed);
         deployments.findById(deploymentId).ifPresent(d ->
-                d.complete("ok", "—", serialize(rows), lastLogLine));
+                d.complete(result, "—", serialize(rows), lastLogLine));
         audit.record(actor, "deploy", groupCmd + " " + String.join(",", apps),
-                String.join(",", actions) + " " + AnsibleRunner.hostExpr(hosts) + " → " + finalAfter);
-        mail.send("devops-team@nagad.com.bd", "Deploy complete — " + deploymentId, "Ran " + cmd);
+                String.join(",", actions) + " " + AnsibleRunner.hostExpr(hosts) + " → " + finalAfter + incidentNote);
+        mail.send("devops-team@nagad.com.bd",
+                (failed.isEmpty() ? "Deploy complete — " : "Deploy INCIDENT — ") + deploymentId,
+                "Ran " + cmd + incidentNote);
         return rows;
     }
 
@@ -97,11 +130,13 @@ public class DeploymentFinalizer {
     public List<Map<String, String>> commitConsolidated(String deploymentId, String actor,
                                                         List<com.nagad.deploy.dto.Dtos.DeployPair> pairs,
                                                         List<String> actions, String cmd, String lastLogLine,
-                                                        java.util.Set<String> skipped, Map<String, String> beforeHashes) {
+                                                        java.util.Set<String> skipped, Map<String, String> beforeHashes,
+                                                        Map<String, String> stateVerdicts) {
         List<Map<String, String>> rows = new ArrayList<>();
         boolean isDeploy = actions.contains("deploy");
         java.util.Set<String> skip = skipped == null ? java.util.Set.of() : skipped;
         Map<String, String> before0 = beforeHashes == null ? Map.of() : beforeHashes;
+        Map<String, String> verdicts = stateVerdicts == null ? Map.of() : stateVerdicts;
         int skippedCount = 0;
 
         for (var p : pairs) {
@@ -133,20 +168,25 @@ public class DeploymentFinalizer {
                     after = prodHash.refreshed(group, app);
                 }
             }
-            rows.add(Map.of("host", host, "app", app, "before", before, "after", after,
-                    "verdict", before.equals(after) ? "unchanged" : "changed"));
+            String verdict = verdicts.getOrDefault(host + ":" + app,
+                    before.equals(after) ? "unchanged" : "changed");
+            rows.add(Map.of("host", host, "app", app, "before", before, "after", after, "verdict", verdict));
         }
 
         String finalAfter = rows.isEmpty() ? "-" : rows.get(rows.size() - 1).get("after");
         String skipNote = skippedCount > 0 ? " (" + skippedCount + " skipped — not installed on host)" : "";
+        String result = resultOf(verdicts);
+        List<String> failed = failures(verdicts);
+        String incidentNote = failed.isEmpty() ? "" : " — INCIDENT: " + String.join(", ", failed);
         deployments.findById(deploymentId).ifPresent(d ->
-                d.complete("ok", "—", serialize(rows), lastLogLine));
+                d.complete(result, "—", serialize(rows), lastLogLine));
         String targets = pairs.stream().map(p -> p.host() + ":" + p.app())
                 .collect(java.util.stream.Collectors.joining(" "));
         audit.record(actor, "deploy", "consolidated " + targets,
-                String.join(",", actions) + " → " + finalAfter + skipNote);
-        mail.send("devops-team@nagad.com.bd", "Consolidated deploy complete — " + deploymentId,
-                "Ran " + cmd + skipNote);
+                String.join(",", actions) + " → " + finalAfter + skipNote + incidentNote);
+        mail.send("devops-team@nagad.com.bd",
+                (failed.isEmpty() ? "Consolidated deploy complete — " : "Consolidated deploy INCIDENT — ") + deploymentId,
+                "Ran " + cmd + skipNote + incidentNote);
         return rows;
     }
 

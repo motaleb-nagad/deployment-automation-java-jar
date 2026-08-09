@@ -31,23 +31,52 @@ public class StgFinalizer {
         this.inv = inv;
     }
 
+    /**
+     * The overall run result from the post-action process verdicts: {@code incident} when any
+     * service failed to reach its expected state (start left it down, or stop left it up),
+     * otherwise {@code ok}. {@code unverified} rows are surfaced per-row but do not, on their own,
+     * mark the whole run an incident.
+     */
+    public static String resultOf(Map<String, String> stateVerdicts) {
+        if (stateVerdicts == null) return "ok";
+        boolean incident = stateVerdicts.values().stream()
+                .anyMatch(v -> "not-running".equals(v) || "still-running".equals(v));
+        return incident ? "incident" : "ok";
+    }
+
+    private static List<String> failures(Map<String, String> stateVerdicts) {
+        List<String> out = new ArrayList<>();
+        if (stateVerdicts == null) return out;
+        stateVerdicts.forEach((k, v) -> {
+            if ("not-running".equals(v) || "still-running".equals(v)) out.add(k + " (" + v + ")");
+        });
+        return out;
+    }
+
     @Transactional
     public List<Map<String, String>> commit(String deploymentId, String actor, String group, String host,
                                              List<String> apps, List<String> actions, String cmd,
-                                             String lastLogLine) {
+                                             String lastLogLine, Map<String, String> stateVerdicts) {
         List<Map<String, String>> rows = new ArrayList<>();
         String outcome = String.join(" → ", actions);
+        Map<String, String> verdicts = stateVerdicts == null ? Map.of() : stateVerdicts;
         for (String app : apps) {
             // Per-app host so npsb-zone rows show the right server; single-host groups fall back.
             String h = inv.hostFor(group, app);
             if (h == null || h.isBlank()) h = host;
-            rows.add(Map.of("host", h, "app", app, "before", "staging", "after", outcome,
-                    "verdict", "changed"));
+            // When the run had a stop/start phase the badge reports the verified live state.
+            String verdict = verdicts.getOrDefault(h + ":" + app, "changed");
+            rows.add(Map.of("host", h, "app", app, "before", "staging", "after", outcome, "verdict", verdict));
         }
-        deployments.findById(deploymentId).ifPresent(d -> d.complete("ok", "—", serialize(rows), lastLogLine));
+        String result = resultOf(verdicts);
+        List<String> failed = failures(verdicts);
+        String incidentNote = failed.isEmpty() ? "" : " — INCIDENT: " + String.join(", ", failed);
+        deployments.findById(deploymentId).ifPresent(d -> d.complete(result, "—", serialize(rows), lastLogLine));
         audit.record(actor, "stg-deploy", "stg-" + group + " " + String.join(",", apps),
-                String.join(",", actions) + " @ " + host);
-        mail.send("devops-team@nagad.com.bd", "Staging deploy complete — " + deploymentId, "Ran " + cmd);
+                String.join(",", actions) + " @ " + host + incidentNote);
+        mail.send("devops-team@nagad.com.bd",
+                (failed.isEmpty() ? "Staging deploy complete — " : "Staging deploy INCIDENT — ") + deploymentId,
+                "Ran " + cmd + incidentNote);
         return rows;
     }
 

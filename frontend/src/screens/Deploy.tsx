@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, openDeployStream, type ResultRow } from '../api/client';
 import { useApp } from '../store/app';
-import { C, rule1, rule2, TERM } from '../theme/colors';
+import { C, rule1, rule2, TERM, verdictMeta, verdictStyle, verdictBad, verdictNeedsRetry } from '../theme/colors';
 import type { DeployGroup, DeployPair, ConsolidatedPairView, StagedJarView } from '../api/types';
 import { PortalUi } from './PortalUi';
 
@@ -73,6 +73,8 @@ export function Deploy() {
     : (effectivePairs.length > 0 && actions.length > 0);
 
   const railHosts = mode === 'group' ? hosts : distinctPairHosts;
+  // The post-action process check gets its own rail column whenever a run has a stop/start phase.
+  const railActions = (actions.includes('start') || actions.includes('stop')) ? [...actions, 'verify'] : actions;
   const needType = railHosts.length > 1;
   const armToken = mode === 'group' ? group.cmd : 'deploy';
   const canExec = !!me?.x && (!needType || typed.trim() === armToken);
@@ -135,6 +137,30 @@ export function Deploy() {
     } catch (e) {
       flash(e instanceof ApiError ? e.message : 'deploy failed', C.stop);
       setStep('confirm');
+    }
+  }
+
+  // One-click retry of a single service that failed verification — re-runs just the intended
+  // run-state action (start, or stop for a stop-only run) for that one host:app, which
+  // re-verifies on completion. No automatic remediation: the operator clicks this deliberately.
+  async function retry(row: ResultRow) {
+    const action = actions.includes('start') ? 'start' : 'stop';
+    setStep('running'); setLines([]); setRail({}); setResult([]); setDone(false);
+    try {
+      const body = mode === 'group'
+        ? { group: group!.cmd, hosts: [row.host], apps: [row.app], actions: [action] }
+        : { pairs: [{ host: row.host, app: row.app }], actions: [action] };
+      const path = mode === 'group' ? '/deploy' : '/deploy/consolidated';
+      const { streamTicket } = await api.post<{ deploymentId: string; streamTicket: string }>(path, body);
+      openDeployStream(streamTicket, {
+        onLine: (l) => setLines((p) => [...p, l]),
+        onHost: (h) => setRail((p) => ({ ...p, [h.host]: { ...(p[h.host] ?? {}), [h.action]: h.state } })),
+        onComplete: (c) => { setResult(c.rows); setDone(true); qc.invalidateQueries(); },
+        onError: (m) => { flash(m, C.stop); setDone(true); },
+      });
+    } catch (e) {
+      flash(e instanceof ApiError ? e.message : 'retry failed', C.stop);
+      setStep('result');
     }
   }
 
@@ -265,12 +291,12 @@ export function Deploy() {
               {railHosts.map((h) => (
                 <div key={h} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: rule1 }}>
                   <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-100)', width: 90 }}>{h}</div>
-                  {actions.map((a) => { const st = rail[h]?.[a] ?? 'pending';
-                    const bg = st === 'done' ? C.run : st === 'active' ? C.warn : 'transparent';
+                  {railActions.map((a) => { const st = rail[h]?.[a] ?? 'pending';
+                    const bg = st === 'done' ? C.run : st === 'fail' ? C.stop : st === 'active' ? C.warn : 'transparent';
                     const bd = st === 'pending' ? '1px solid var(--color-neutral-600)' : '1px solid transparent';
                     return <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       <div style={{ width: 10, height: 10, background: bg, border: bd, animation: st === 'active' ? 'pulse 1s infinite' : 'none' }} />
-                      <span style={{ fontFamily: mono, fontSize: 9.5, color: 'var(--color-neutral-500)' }}>{a}</span></div>;
+                      <span style={{ fontFamily: mono, fontSize: 9.5, color: a === 'verify' ? 'var(--color-neutral-300)' : 'var(--color-neutral-500)' }}>{a}</span></div>;
                   })}
                 </div>
               ))}
@@ -283,24 +309,43 @@ export function Deploy() {
         </>
       )}
 
-      {step === 'result' && (
-        <div style={{ maxWidth: 1000 }}>
+      {step === 'result' && (() => {
+        const incident = result.some((r) => verdictBad(r.verdict));
+        const unverified = result.some((r) => r.verdict === 'unverified');
+        const retryAction = actions.includes('start') ? 'start' : 'stop';
+        const cols = '100px 150px 1fr 130px 96px';
+        return (
+        <div style={{ maxWidth: 1040 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '20px 0 14px' }}>
-            <div style={{ width: 14, height: 14, background: C.run }} />
-            <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>Completed</h3>
+            <div style={{ width: 14, height: 14, background: incident ? C.stop : C.run }} />
+            <h3 style={{ margin: 0, color: 'var(--color-neutral-100)' }}>{incident ? 'Incident' : 'Completed'}</h3>
             <div style={{ fontFamily: mono, fontSize: 12, color: 'var(--color-neutral-400)' }}>
               {result.length} host×app · {result.filter((r) => r.verdict === 'changed').length} changed
               {result.some((r) => r.verdict === 'skipped') && <> · {result.filter((r) => r.verdict === 'skipped').length} skipped</>}
+              {incident && <> · <span style={{ color: C.stop }}>{result.filter((r) => verdictBad(r.verdict)).length} not confirmed</span></>}
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '100px 160px 1fr 130px', gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
-            <div>HOST</div><div>SERVICE</div><div>BEFORE → AFTER</div><div>VERDICT</div>
+          {incident && (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: 12, marginBottom: 14, borderLeft: `3px solid ${C.stop}`, background: 'color-mix(in srgb, var(--color-accent-500) 10%, transparent)' }}>
+              <div style={{ width: 10, height: 10, background: C.stop, marginTop: 3, flex: 'none' }} />
+              <div style={{ fontSize: 12.5, color: 'var(--color-neutral-200)' }}>
+                <strong style={{ fontFamily: 'var(--font-heading)', fontSize: 10, letterSpacing: '.12em', color: C.stop }}>INCIDENT — STATE NOT CONFIRMED</strong><br />
+                Ansible reported success, but reading the process table on the host shows {result.filter((r) => verdictBad(r.verdict)).length} service(s) did not reach the expected state. Nothing was rolled back or restarted on your behalf — retry the service or investigate on the host.
+              </div>
+            </div>
+          )}
+          {!incident && unverified && (
+            <div style={{ fontSize: 12, color: C.warn, marginBottom: 12 }}>Some services could not be verified (host unreadable). Their live state is unconfirmed — check the host or retry.</div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '6px 8px', borderTop: rule2, borderBottom: rule1, fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em', color: 'var(--color-neutral-500)' }}>
+            <div>HOST</div><div>SERVICE</div><div>BEFORE → AFTER</div><div>VERDICT</div><div />
           </div>
           {result.map((rw, i) => {
             const skipped = rw.verdict === 'skipped';
             const changed = rw.verdict === 'changed';
+            const vm = verdictMeta(rw.verdict); const vs = verdictStyle(vm.kind);
             return (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '100px 160px 1fr 130px', gap: 12, padding: 8, borderBottom: rule1, fontFamily: mono, fontSize: 12, alignItems: 'center', opacity: skipped ? 0.75 : 1 }}>
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: 8, borderBottom: rule1, fontFamily: mono, fontSize: 12, alignItems: 'center', opacity: skipped ? 0.75 : 1 }}>
               <div style={{ color: 'var(--color-neutral-100)' }}>{rw.host}</div>
               <div style={{ color: 'var(--color-neutral-300)' }}>{rw.app}</div>
               <div>
@@ -308,7 +353,15 @@ export function Deploy() {
                   ? <span style={{ color: C.warn }}>— not installed on {rw.host}, skipped</span>
                   : <><span style={{ color: 'var(--color-neutral-500)' }}>{rw.before}</span> <span style={{ color: 'var(--color-neutral-500)' }}>→</span> <span style={{ color: changed ? '#22c55e' : 'var(--color-neutral-400)', fontWeight: 700 }}>{rw.after}</span></>}
               </div>
-              <div style={{ justifySelf: 'start', padding: '2px 8px', background: changed ? C.run : 'transparent', color: changed ? C.inkOnGreen : skipped ? C.warn : 'var(--color-neutral-500)', border: changed ? 'none' : skipped ? `1px solid ${C.warn}` : '1px solid var(--color-neutral-700)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9.5, letterSpacing: '.1em' }}>{rw.verdict.toUpperCase()}</div>
+              <div style={{ justifySelf: 'start', padding: '2px 8px', background: vs.background, color: vs.color, border: vs.border, fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9.5, letterSpacing: '.1em' }}>{vm.label}</div>
+              <div>
+                {verdictNeedsRetry(rw.verdict) && me?.x && (
+                  <button onClick={() => retry(rw)} title={`Re-run ${retryAction} for ${rw.app} @ ${rw.host}`}
+                    style={{ border: `1px solid ${C.stop}`, background: 'transparent', color: C.stop, cursor: 'pointer', padding: '3px 9px', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 9, letterSpacing: '.1em' }}>
+                    RETRY {retryAction.toUpperCase()}
+                  </button>
+                )}
+              </div>
             </div>
           ); })}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 18 }}>
@@ -316,7 +369,7 @@ export function Deploy() {
             <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)' }}>Same report emailed to devops-team@nagad.com.bd · logged to the audit trail · registry updated.</div>
           </div>
         </div>
-      )}
+      ); })()}
     </main>
   );
 }

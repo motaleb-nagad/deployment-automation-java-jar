@@ -324,19 +324,25 @@ public class DeploymentService {
                     if (!inv.demoPresentOnHost(p.host(), p.app())) skipped.add(p.host() + ":" + p.app());
                 }
             }
+
+            // Independent post-action verification: read the real process table on each host and
+            // confirm the service actually reached the expected state (start → running, stop-only
+            // → stopped). This is what makes the console's confirmation truthful for slow services.
+            Map<String, String> verdicts = verifyRun(plan, emitter, skipped);
+
             List<Map<String, String>> rows;
             if (plan.portalUi()) {
                 rows = finalizer.commitPortalUi(plan.deploymentId(), plan.actor(), plan.pui(),
                         plan.hosts(), plan.cmd(), lastLog);
             } else if (plan.consolidated()) {
                 rows = finalizer.commitConsolidated(plan.deploymentId(), plan.actor(), plan.pairs(),
-                        plan.actions(), plan.cmd(), lastLog, skipped, plan.beforeHashes());
+                        plan.actions(), plan.cmd(), lastLog, skipped, plan.beforeHashes(), verdicts);
             } else {
                 rows = finalizer.commit(plan.deploymentId(), plan.actor(), plan.group().cmd(),
-                        plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog, plan.beforeHashes());
+                        plan.hosts(), plan.apps(), plan.actions(), plan.cmd(), lastLog, plan.beforeHashes(), verdicts);
             }
             emitter.send(SseEmitter.event().name("complete").data(Map.of(
-                    "deploymentId", plan.deploymentId(), "result", "ok", "rows", rows)));
+                    "deploymentId", plan.deploymentId(), "result", DeploymentFinalizer.resultOf(verdicts), "rows", rows)));
             emitter.complete();
         } catch (Exception e) {
             log.warn("deploy stream {} failed: {}", plan.deploymentId(), e.toString());
@@ -404,6 +410,73 @@ public class DeploymentService {
             emitter.send(SseEmitter.event().name("host").data(Map.of(
                     "host", ln.railHost(), "action", ln.railAction(), "state", ln.railState())));
         }
+    }
+
+    /**
+     * Confirm the real post-run state of every service on its host and return {@code host:app →
+     * verdict} (running / not-running / stopped / still-running / unverified). Runs only when the
+     * run had a stop or start phase (a deploy-only run changes no run state) and never for a
+     * portal-UI run (static files, no process). Streams the check to the console. Read-only — it
+     * never touches a service; a bad verdict is reported, not remediated.
+     */
+    private Map<String, String> verifyRun(RunPlan plan, SseEmitter emitter, Set<String> skipped) {
+        if (plan.portalUi() || !runner.verifyEnabled()) return Map.of();
+        boolean hasStart = plan.actions().contains("start");
+        boolean hasStop = plan.actions().contains("stop");
+        if (!hasStart && !hasStop) return Map.of();
+        boolean expectRunning = hasStart; // stop→deploy→start ends running; stop-only ends stopped
+
+        List<AnsibleRunner.VerifyTarget> targets = new ArrayList<>();
+        if (plan.consolidated()) {
+            for (DeployPair p : plan.pairs()) {
+                if (skipped != null && skipped.contains(p.host() + ":" + p.app())) continue; // not installed
+                targets.add(new AnsibleRunner.VerifyTarget(p.app(),
+                        FleetInventory.JAR_MAP.getOrDefault(p.app(), p.app() + "-1.0.jar"), p.host()));
+            }
+        } else {
+            for (String app : plan.apps()) {
+                String jar = FleetInventory.JAR_MAP.getOrDefault(app, app + "-1.0.jar");
+                for (String h : plan.hosts()) targets.add(new AnsibleRunner.VerifyTarget(app, jar, h));
+            }
+        }
+        if (targets.isEmpty()) return Map.of();
+
+        Consumer<Line> sink = ln -> {
+            try { sendLine(emitter, ln); } catch (IOException e) { throw new UncheckedIOException(e); }
+        };
+
+        Map<String, String> verdicts = new LinkedHashMap<>();
+        if (simulate) {
+            // Demo mode: no SSH — synthesise a verified-good outcome so the mechanism is visible.
+            String good = expectRunning ? "running" : "stopped";
+            sink.accept(Line.log("task", "TASK [verify : confirm " + (expectRunning ? "started" : "stopped")
+                    + " on host — reading process table] " + "*".repeat(20)));
+            for (AnsibleRunner.VerifyTarget t : targets) {
+                verdicts.put(t.host() + ":" + t.app(), good);
+                sink.accept(new Line("ok", "ok: [" + t.host() + "] => " + t.app() + " "
+                        + good.toUpperCase() + " — verified on host", t.host(), "verify", "done"));
+            }
+            return verdicts;
+        }
+        try {
+            Map<String, AnsibleRunner.ProcState> state = runner.verifyProcesses(targets, expectRunning, sink);
+            for (AnsibleRunner.VerifyTarget t : targets) {
+                verdicts.put(t.host() + ":" + t.app(),
+                        verdictOf(state.get(t.host() + ":" + t.app()), expectRunning));
+            }
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("post-run verification failed for {}: {}", plan.deploymentId(), e.toString());
+            for (AnsibleRunner.VerifyTarget t : targets) verdicts.put(t.host() + ":" + t.app(), "unverified");
+        }
+        return verdicts;
+    }
+
+    /** Map a raw process reading to a row verdict for the intended end-state. */
+    private static String verdictOf(AnsibleRunner.ProcState s, boolean expectRunning) {
+        if (s == null || !s.reached()) return "unverified";
+        if (expectRunning) return s.running() ? "running" : "not-running";
+        return s.running() ? "still-running" : "stopped";
     }
 
     /** Managed groups with their hosts and per-app approval state, for the Deploy panel. */

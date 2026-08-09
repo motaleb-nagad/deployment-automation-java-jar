@@ -55,6 +55,15 @@ nagad:
       user: ${ANSIBLE_SSH_USER:konasl}
       key: ${ANSIBLE_SSH_KEY:/run/secrets/deploy_key}
       strict-host-key-checking: ${ANSIBLE_SSH_STRICT:false}
+  # Post-action process verification (see the main backend's application.yml for the full note).
+  # After a stop/start run the staging console reads the live process table on each staging host
+  # and confirms the service actually reached the expected state. Read-only — a bad result is
+  # flagged as an INCIDENT for a human to act on; nothing is restarted or rolled back automatically.
+  verify:
+    enabled: ${VERIFY_ENABLED:true}
+    start-timeout-seconds: ${VERIFY_START_TIMEOUT:180}
+    stop-timeout-seconds: ${VERIFY_STOP_TIMEOUT:45}
+    interval-seconds: ${VERIFY_INTERVAL:6}
   mail:
     relay: ${MAIL_RELAY:10.210.2.16:25}
     from: no-reply@nagad.com.bd
