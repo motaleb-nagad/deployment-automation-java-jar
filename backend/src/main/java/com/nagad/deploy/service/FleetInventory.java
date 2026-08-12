@@ -198,10 +198,10 @@ public class FleetInventory {
         // NPSB tiers — each backed by its own npsb-*.yml playbook (src 10.220.2.46, port 40167).
         g.add(new Group("nagad-npsb-apigw", "npsb-apigw", "DMZ", "NPSB API gateway · npsb-apigw1–2",
                 seq("npsb-apigw", 1, 2, "10.210.10", 135), svcs(List.of("apigw"))));
-        g.add(new Group("nagad-npsb-spg", "npsb-spg", "DMZ", "NPSB secure payment gateway · npsb-spg1–2",
-                seq("npsb-spg", 1, 2, "10.210.10", 210), svcs(List.of("spg"))));
-        g.add(new Group("nagad-npsb-pp", "npsb-pp", "DC", "NPSB payment processor + parser · npsb-pp1",
-                seq("npsb-pp", 1, 1, "10.220.10", 218), svcs(List.of("pp", "npsb_parser"))));
+        g.add(new Group("nagad-npsb-spg", "npsb-spg", "DC", "NPSB secure payment gateway · npsb-spg1–2",
+                seq("npsb-spg", 1, 2, "10.220.10", 210), svcs(List.of("spg"))));
+        g.add(new Group("nagad-npsb-pp", "npsb-pp", "DC", "NPSB payment processor + parser · npsb-pp1–2",
+                seq("npsb-pp", 1, 2, "10.220.10", 218), svcs(List.of("pp", "npsb_parser"))));
         g.add(new Group("nagad-npsb-png", "npsb-png", "DMZ", "NPSB payment network gateway · npsb-png1",
                 seq("npsb-png", 1, 1, "10.210.10", 37), svcs(List.of("png"))));
         // Staging sources (not managed by run.sh — promotion sources only).
