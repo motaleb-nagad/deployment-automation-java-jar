@@ -44,7 +44,7 @@ export function Header() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
         <div style={{ width: 14, height: 14, background: 'var(--color-accent)' }} />
         <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 14, letterSpacing: '.05em', color: 'var(--color-neutral-100)', whiteSpace: 'nowrap' }}>
-          NAGAD <span style={{ color: 'var(--color-neutral-500)', fontWeight: 600 }}>DEPLOY</span>
+          NAGAD <span style={{ color: 'var(--color-neutral-500)', fontWeight: 600 }}>DEVOPS DEPLOY</span>
         </div>
       </div>
 

@@ -56,7 +56,7 @@ export function ChangePassword() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 18, height: 18, background: 'var(--color-accent)' }} />
           <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 18, letterSpacing: '.05em', color: 'var(--color-neutral-100)' }}>
-            NAGAD <span style={{ color: 'var(--color-neutral-500)', fontWeight: 600 }}>DEPLOY CONSOLE</span>
+            NAGAD <span style={{ color: 'var(--color-neutral-500)', fontWeight: 600 }}>DEVOPS DEPLOY CONSOLE</span>
           </div>
         </div>
         <div>
