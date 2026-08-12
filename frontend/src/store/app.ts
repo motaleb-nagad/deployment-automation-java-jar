@@ -47,7 +47,7 @@ interface AppState {
 export const useApp = create<AppState>((set) => ({
   me: null,
   screen: initialScreen,
-  scenario: 'incident',
+  scenario: 'healthy',
   toast: null,
   detail: null,
 

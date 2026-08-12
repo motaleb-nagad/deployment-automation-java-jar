@@ -16,13 +16,22 @@ const TESTABLE = new Set(['update', 'add_csv', 'remove_csv', 'rename', 'append',
 const OP_HELP: Record<string, string> = {
   preview: 'Show the file (or grep one key). Read-only.',
   update: 'Replace one exact line with another. Must match exactly once.',
-  add_csv: 'Append value(s) to a comma-separated key.',
-  remove_csv: 'Remove value(s) from a comma-separated key.',
+  add_csv: 'Add value(s) to a comma-separated (list) key, e.g. add a node to sentinel.nodes.',
+  remove_csv: 'Remove value(s) from a comma-separated (list) key, leaving the rest of the list intact.',
   rename: 'Rename a key, keeping its value.',
-  append: 'Add a block of lines at the end of the file (with a dated header).',
-  insert: 'Insert a block of lines right after a specific existing line.',
+  append: 'Add a block of NEW lines at the END of the file (with a dated header). Use when the keys don’t exist yet.',
+  insert: 'Place a block of lines directly AFTER a specific existing line. Use to keep related keys together.',
   diff: 'Show the difference between the live file and its last backup. Read-only.',
   restore: 'Restore the file from its .bkp.ansible backup.',
+};
+
+// Plain-language button labels. The underlying value (and the COMMAND box) keep the
+// real properties.sh sub-command name — only the button caption is friendlier.
+const OP_LABEL: Record<string, string> = {
+  add_csv: 'add to list',
+  remove_csv: 'remove from list',
+  append: 'append at end',
+  insert: 'insert after line',
 };
 
 /**
@@ -189,7 +198,7 @@ export function Properties() {
             <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>4 — OPERATION</h6>
             <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
               {cat.ops.map((o) => (
-                <button key={o} onClick={() => { setOp(o); setResult(null); }} style={pill(o === op, '7px 12px', 11.5)}>{o}</button>
+                <button key={o} onClick={() => { setOp(o); setResult(null); }} style={pill(o === op, '7px 12px', 11.5)}>{OP_LABEL[o] ?? o}</button>
               ))}
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', marginTop: 8 }}>{OP_HELP[op]}</div>
