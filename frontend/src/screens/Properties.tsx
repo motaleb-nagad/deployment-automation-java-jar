@@ -216,6 +216,18 @@ export function Properties() {
             {(op === 'add_csv' || op === 'remove_csv') && (<>
               <Field label="KEY"><input value={key} onChange={(e) => setKey(e.target.value)} placeholder="spring.redis.sentinel.nodes" style={inp} /></Field>
               <Field label={op === 'add_csv' ? 'VALUE(S) TO ADD (comma-separated)' : 'VALUE(S) TO REMOVE (comma-separated)'}><input value={values} onChange={(e) => setValues(e.target.value)} placeholder="redis4.kpp.com:26379" style={inp} /></Field>
+              <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', fontFamily: mono, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--font-heading)', letterSpacing: '.06em' }}>EXAMPLE</span>
+                {op === 'add_csv' ? (<>
+                  <span>value <b style={{ color: 'var(--color-neutral-100)' }}>200,300</b></span>
+                  <span>· add <b style={{ color: 'var(--color-accent-400)' }}>500</b></span>
+                  <span>→ <b style={{ color: 'var(--color-neutral-100)' }}>200,300,<span style={{ color: 'var(--color-accent-400)' }}>500</span></b></span>
+                </>) : (<>
+                  <span>value <b style={{ color: 'var(--color-neutral-100)' }}>200,300,<span style={{ color: 'var(--color-accent-400)' }}>500</span></b></span>
+                  <span>· remove <b style={{ color: 'var(--color-accent-400)' }}>500</b></span>
+                  <span>→ <b style={{ color: 'var(--color-neutral-100)' }}>200,300</b></span>
+                </>)}
+              </div>
             </>)}
             {op === 'rename' && (<>
               <Field label="OLD KEY"><input value={oldKey} onChange={(e) => setOldKey(e.target.value)} placeholder="item-error-code" style={inp} /></Field>
