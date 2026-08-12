@@ -13,13 +13,22 @@ const TESTABLE = new Set(['update', 'add_csv', 'remove_csv', 'rename', 'append',
 const OP_HELP: Record<string, string> = {
   preview: 'Show the file (or grep one key). Read-only.',
   update: 'Replace one exact line with another. Must match exactly once.',
-  add_csv: 'Append value(s) to a comma-separated key.',
-  remove_csv: 'Remove value(s) from a comma-separated key.',
+  add_csv: 'Add value(s) to a comma-separated (list) key, e.g. add a node to sentinel.nodes.',
+  remove_csv: 'Remove value(s) from a comma-separated (list) key, leaving the rest of the list intact.',
   rename: 'Rename a key, keeping its value.',
-  append: 'Add a block of lines at the end of the file (with a dated header).',
-  insert: 'Insert a block of lines right after a specific existing line.',
+  append: 'Add a block of NEW lines at the END of the file (with a dated header). Use when the keys don’t exist yet.',
+  insert: 'Place a block of lines directly AFTER a specific existing line. Use to keep related keys together.',
   diff: 'Show the difference between the live file and its last backup. Read-only.',
   restore: 'Restore the file from its .bkp.ansible backup.',
+};
+
+// Plain-language button labels. The underlying value (and the COMMAND box) keep the
+// real properties.sh sub-command name — only the button caption is friendlier.
+const OP_LABEL: Record<string, string> = {
+  add_csv: 'add to list',
+  remove_csv: 'remove from list',
+  append: 'append at end',
+  insert: 'insert after line',
 };
 
 /**
@@ -140,7 +149,7 @@ export function StgProperties() {
             <h6 style={{ color: 'var(--color-neutral-400)', margin: '0 0 8px' }}>3 — OPERATION</h6>
             <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
               {cat.ops.map((o) => (
-                <button key={o} onClick={() => { setOp(o); setResult(null); }} style={pill(o === op, '7px 12px', 11.5)}>{o}</button>
+                <button key={o} onClick={() => { setOp(o); setResult(null); }} style={pill(o === op, '7px 12px', 11.5)}>{OP_LABEL[o] ?? o}</button>
               ))}
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', marginTop: 8 }}>{OP_HELP[op]}</div>
@@ -155,6 +164,18 @@ export function StgProperties() {
             {(op === 'add_csv' || op === 'remove_csv') && (<>
               <Field label="KEY"><input value={key} onChange={(e) => setKey(e.target.value)} placeholder="spring.redis.sentinel.nodes" style={inp} /></Field>
               <Field label={op === 'add_csv' ? 'VALUE(S) TO ADD (comma-separated)' : 'VALUE(S) TO REMOVE (comma-separated)'}><input value={values} onChange={(e) => setValues(e.target.value)} placeholder="redis4.kpp.com:26379" style={inp} /></Field>
+              <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', fontFamily: mono, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--font-heading)', letterSpacing: '.06em' }}>EXAMPLE</span>
+                {op === 'add_csv' ? (<>
+                  <span>value <b style={{ color: 'var(--color-neutral-100)' }}>200,300</b></span>
+                  <span>· add <b style={{ color: 'var(--color-accent-400)' }}>500</b></span>
+                  <span>→ <b style={{ color: 'var(--color-neutral-100)' }}>200,300,<span style={{ color: 'var(--color-accent-400)' }}>500</span></b></span>
+                </>) : (<>
+                  <span>value <b style={{ color: 'var(--color-neutral-100)' }}>200,300,<span style={{ color: 'var(--color-accent-400)' }}>500</span></b></span>
+                  <span>· remove <b style={{ color: 'var(--color-accent-400)' }}>500</b></span>
+                  <span>→ <b style={{ color: 'var(--color-neutral-100)' }}>200,300</b></span>
+                </>)}
+              </div>
             </>)}
             {op === 'rename' && (<>
               <Field label="OLD KEY"><input value={oldKey} onChange={(e) => setOldKey(e.target.value)} placeholder="item-error-code" style={inp} /></Field>
