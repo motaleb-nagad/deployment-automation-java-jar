@@ -18,7 +18,7 @@ const TABS: { label: string; screen: Screen; needsSA?: boolean }[] = [
 ];
 
 export function Header() {
-  const { me, screen, go, scenario, setScenario, signOut, flash } = useApp();
+  const { me, screen, go, signOut, flash } = useApp();
   const isSA = me?.role === 'superadmin';
 
   const { data: pending } = useQuery({
@@ -70,16 +70,6 @@ export function Header() {
       <div style={{ flex: 1 }} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', border: '1px solid color-mix(in srgb, var(--color-neutral-100) 30%, transparent)' }}>
-          {(['incident', 'healthy'] as const).map((s) => (
-            <button key={s} onClick={() => setScenario(s)} title="demo scenario"
-              style={{ border: 0, cursor: 'pointer', padding: '5px 10px', fontFamily: 'var(--font-heading)',
-                fontWeight: 600, fontSize: 9.5, letterSpacing: '.1em',
-                background: scenario === s ? 'var(--color-neutral-100)' : 'transparent',
-                color: scenario === s ? 'var(--color-text)' : 'var(--color-neutral-500)' }}>{s.toUpperCase()}</button>
-          ))}
-        </div>
-
         <div title="persistent store" style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)',
           fontSize: 10.5, color: 'var(--color-neutral-500)', whiteSpace: 'nowrap' }}>
           <span style={{ width: 7, height: 7, background: 'oklch(0.72 0.15 152)' }} />registry-db · postgres
