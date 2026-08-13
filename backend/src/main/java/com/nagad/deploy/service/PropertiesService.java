@@ -130,7 +130,7 @@ public class PropertiesService {
             throw new ResponseStatusException(BAD_GATEWAY, "properties run failed on jump host: " + e.getMessage());
         }
 
-        String savedBlock = PropertiesRunner.BLOCK_OPS.contains(op) ? blockPath : null;
+        String savedBlock = null; // block ops now pass lines inline — no temp file is staged
         String cmd = runner.command(String.join(",", hosts), r, blockPath);
         // No surrounding business transaction (the run itself must not hold one, especially a
         // real SSH run) — use the standalone audit write.
