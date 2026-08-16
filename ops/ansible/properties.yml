@@ -1,0 +1,610 @@
+---
+# properties.yml — surgical in-place editing of application.properties
+# Path: /home/<app>/cfg/application.properties
+#
+# All perl uses -i -ne (NOT -pi -e) — no double-print, no newline loss.
+# Backup: .bkp.ansible (for diff/restore) + timestamped .bkp.DDMMYYYY_HHMMSS (history)
+# Lock: prevents concurrent edits to same host:app
+# Mail: HTML notification after real write with full diff
+# Test: --test edits .test.ansible copy only
+
+- hosts: all
+  gather_facts: false
+  vars_files:
+    - group_vars_mail.yml
+  vars:
+    cfg_dir: "/home/{{ app }}/cfg"
+    props_real: "{{ cfg_dir }}/application.properties"
+    props_test: "{{ cfg_dir }}/application.properties.test.ansible"
+    backup_file: "{{ cfg_dir }}/application.properties.bkp.ansible"
+    is_test: "{{ test_mode | default(false) | bool }}"
+    props: "{{ props_test if is_test else props_real }}"
+    write_ops:
+      - update
+      - add_csv
+      - remove_csv
+      - rename
+      - append
+      - insert
+    lock_file: "/tmp/.properties.lock.{{ inventory_hostname }}.{{ app }}"
+
+  pre_tasks:
+    - name: "GUARD — app is required"
+      fail:
+        msg: "Missing 'app'. Use -e \"app=<service_user>\""
+      when: app is not defined or (app | trim) == ""
+      run_once: true
+
+    - name: "GUARD — op is required and valid"
+      fail:
+        msg: >-
+          Invalid op='{{ op | default("") }}'.
+          Valid: preview update add_csv remove_csv rename
+          append insert diff restore
+      when: >-
+        op is not defined or
+        op not in ['preview','update','add_csv','remove_csv',
+                    'rename','append','insert','diff','restore']
+      run_once: true
+
+    - name: "GUARD — real properties file must exist"
+      become: yes
+      become_user: "{{ app }}"
+      stat:
+        path: "{{ props_real }}"
+      register: props_stat
+
+    - name: "GUARD — fail if missing"
+      fail:
+        msg: "{{ props_real }} not found on {{ inventory_hostname }}"
+      when: not props_stat.stat.exists
+
+    # ---------- LOCK (real write only) ----------
+    - name: "LOCK — check no concurrent edit"
+      stat:
+        path: "{{ lock_file }}"
+      register: lock_stat
+      delegate_to: localhost
+      become: false
+      when: op in write_ops and not is_test
+
+    - name: "LOCK — fail if locked"
+      fail:
+        msg: >-
+          LOCKED — another edit in progress for {{ inventory_hostname }}:{{ app }}.
+          Lock: {{ lock_file }}. If stale: rm {{ lock_file }}
+      when: op in write_ops and not is_test and lock_stat.stat.exists
+
+    - name: "LOCK — acquire"
+      copy:
+        content: "locked by {{ lookup('env','USER') }} at {{ lookup('pipe','date') }}\n"
+        dest: "{{ lock_file }}"
+      delegate_to: localhost
+      become: false
+      when: op in write_ops and not is_test
+
+    # ---------- TEST MODE ----------
+    - name: "TEST — copy real to .test.ansible"
+      become: yes
+      become_user: "{{ app }}"
+      copy:
+        src: "{{ props_real }}"
+        dest: "{{ props_test }}"
+        remote_src: yes
+        force: yes
+      when: is_test and op in write_ops
+
+    - name: "TEST — banner"
+      debug:
+        msg: "TEST MODE — edits go to {{ props_test }}. Real file untouched."
+      when: is_test and op in write_ops
+
+    # ---------- BACKUP (real write only) ----------
+    - name: "BACKUP — create .bkp.ansible (for diff/restore)"
+      become: yes
+      become_user: "{{ app }}"
+      copy:
+        src: "{{ props_real }}"
+        dest: "{{ backup_file }}"
+        remote_src: yes
+        force: yes
+      when: op in write_ops and not is_test
+
+    - name: "BACKUP — create timestamped copy (history)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        TS=$(TZ="Asia/Dhaka" date +%Y%m%d_%H%M%S)
+        cp "{{ backup_file }}" "{{ cfg_dir }}/application.properties.bkp.${TS}"
+        echo "application.properties.bkp.${TS}"
+      args: { executable: /bin/bash }
+      register: ts_backup
+      when: op in write_ops and not is_test
+
+    - name: "BACKUP — confirm"
+      debug:
+        msg: "Backup: {{ backup_file }} + {{ ts_backup.stdout | default('') }}"
+      when: op in write_ops and not is_test
+
+  tasks:
+
+    # ======================== PREVIEW ========================
+    - name: "PREVIEW — grep key"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        grep -n -- "$SEARCH_KEY" "{{ props_real }}" || echo "NOT FOUND: $SEARCH_KEY"
+      args: { executable: /bin/bash }
+      environment:
+        SEARCH_KEY: "{{ key }}"
+      register: preview_result
+      changed_when: false
+      when: op == 'preview' and key is defined
+
+    - name: "PREVIEW — full file"
+      become: yes
+      become_user: "{{ app }}"
+      shell: "wc -l < '{{ props_real }}'; echo '---'; cat -n '{{ props_real }}'"
+      args: { executable: /bin/bash }
+      register: preview_full
+      changed_when: false
+      when: op == 'preview' and key is not defined
+
+    - name: "PREVIEW — display"
+      debug:
+        msg: "{{ (preview_result | default(preview_full)).stdout_lines }}"
+      when: op == 'preview'
+
+    # ======================== UPDATE ========================
+    - name: "UPDATE — verify old line exists exactly once"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        CLEAN_OLD=$(printf '%s' "$OLD_LINE" | sed 's/[[:space:]]*$//')
+        COUNT=$(sed 's/[[:space:]]*$//' "{{ props }}" | grep -cxF -- "$CLEAN_OLD")
+        if [ "$COUNT" -eq 0 ]; then
+          echo "ERROR: Line not found in {{ props }}"
+          echo "Searched (exact): $OLD_LINE"
+          exit 1
+        elif [ "$COUNT" -gt 1 ]; then
+          echo "ERROR: Found $COUNT times (must be exactly 1)"
+          exit 1
+        fi
+        LINE_NUM=$(awk -v old="$CLEAN_OLD" '{ line=$0; gsub(/[[:space:]]+$/, "", line); if (line == old) print NR }' "{{ props }}")
+        echo "MATCH: line $LINE_NUM"
+      args: { executable: /bin/bash }
+      environment:
+        OLD_LINE: "{{ old_line }}"
+      register: update_check
+      failed_when: update_check.rc != 0
+      when: op == 'update'
+
+    - name: "UPDATE — preview"
+      debug:
+        msg:
+          - "{{ update_check.stdout }}"
+          - "OLD: {{ old_line }}"
+          - "NEW: {{ new_line }}"
+      when: op == 'update'
+
+    - name: "UPDATE — replace (perl -i -ne)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        perl -i -ne '
+          chomp;
+          my $trimmed = $_;
+          $trimmed =~ s/\s+$//;
+          my $old_trimmed = $ENV{OLD_LINE};
+          $old_trimmed =~ s/\s+$//;
+          if ($trimmed eq $old_trimmed) {
+            print $ENV{NEW_LINE} . "\n";
+          } else {
+            print $_ . "\n";
+          }
+        ' "{{ props }}"
+      args: { executable: /bin/bash }
+      environment:
+        OLD_LINE: "{{ old_line }}"
+        NEW_LINE: "{{ new_line }}"
+      when: op == 'update'
+
+    # ======================== ADD_CSV ========================
+    - name: "ADD_CSV — verify key exists once"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        COUNT=$(grep -c "^${PROP_KEY}=" "{{ props }}")
+        if [ "$COUNT" -eq 0 ]; then echo "ERROR: Key not found: $PROP_KEY"; exit 1; fi
+        if [ "$COUNT" -gt 1 ]; then echo "ERROR: Key found $COUNT times"; exit 1; fi
+        CURRENT=$(grep "^${PROP_KEY}=" "{{ props }}")
+        echo "CURRENT: $CURRENT"
+        echo "WILL BE: ${CURRENT},${ADD_VALUES}"
+      args: { executable: /bin/bash }
+      environment:
+        PROP_KEY: "{{ key }}"
+        ADD_VALUES: "{{ values }}"
+      register: addcsv_check
+      failed_when: addcsv_check.rc != 0
+      when: op == 'add_csv'
+
+    - name: "ADD_CSV — preview"
+      debug:
+        msg: "{{ addcsv_check.stdout_lines }}"
+      when: op == 'add_csv'
+
+    - name: "ADD_CSV — append values (perl -i -ne)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        perl -i -ne '
+          chomp;
+          if (/^\Q$ENV{PROP_KEY}\E=(.*)$/) {
+            print "$ENV{PROP_KEY}=$1,$ENV{ADD_VALUES}\n";
+          } else {
+            print "$_\n";
+          }
+        ' "{{ props }}"
+      args: { executable: /bin/bash }
+      environment:
+        PROP_KEY: "{{ key }}"
+        ADD_VALUES: "{{ values }}"
+      when: op == 'add_csv'
+
+    # ======================== REMOVE_CSV ========================
+    - name: "REMOVE_CSV — verify key exists"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        COUNT=$(grep -c "^${PROP_KEY}=" "{{ props }}")
+        if [ "$COUNT" -eq 0 ]; then echo "ERROR: Key not found: $PROP_KEY"; exit 1; fi
+        echo "BEFORE: $(grep "^${PROP_KEY}=" "{{ props }}")"
+      args: { executable: /bin/bash }
+      environment:
+        PROP_KEY: "{{ key }}"
+      register: rmcsv_check
+      failed_when: rmcsv_check.rc != 0
+      when: op == 'remove_csv'
+
+    - name: "REMOVE_CSV — remove values (perl -i -ne)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        perl -i -ne '
+          chomp;
+          if (/^\Q$ENV{PROP_KEY}\E=(.*)$/) {
+            my $val = $1;
+            foreach my $rm (split /,/, $ENV{RM_VALUES}) {
+              $rm =~ s/^\s+|\s+$//g;
+              $val =~ s/(^|,)\Q$rm\E(,|$)/$1/g;
+              $val =~ s/^,|,$//g;
+              $val =~ s/,,/,/g;
+            }
+            print "$ENV{PROP_KEY}=$val\n";
+          } else {
+            print "$_\n";
+          }
+        ' "{{ props }}"
+      args: { executable: /bin/bash }
+      environment:
+        PROP_KEY: "{{ key }}"
+        RM_VALUES: "{{ values }}"
+      when: op == 'remove_csv'
+
+    - name: "REMOVE_CSV — show result"
+      become: yes
+      become_user: "{{ app }}"
+      shell: grep "^${PROP_KEY}=" "{{ props }}"
+      args: { executable: /bin/bash }
+      environment:
+        PROP_KEY: "{{ key }}"
+      register: rmcsv_after
+      changed_when: false
+      when: op == 'remove_csv'
+
+    - name: "REMOVE_CSV — display"
+      debug:
+        msg:
+          - "{{ rmcsv_check.stdout }}"
+          - "AFTER:  {{ rmcsv_after.stdout }}"
+      when: op == 'remove_csv'
+
+    # ======================== RENAME ========================
+    - name: "RENAME — verify old key exists once"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        COUNT=$(grep -c "^${OLD_KEY}=" "{{ props }}")
+        if [ "$COUNT" -eq 0 ]; then echo "ERROR: Key not found: $OLD_KEY"; exit 1; fi
+        if [ "$COUNT" -gt 1 ]; then echo "ERROR: Key found $COUNT times"; exit 1; fi
+        echo "CURRENT: $(grep "^${OLD_KEY}=" "{{ props }}")"
+      args: { executable: /bin/bash }
+      environment:
+        OLD_KEY: "{{ old_key }}"
+      register: rename_check
+      failed_when: rename_check.rc != 0
+      when: op == 'rename'
+
+    - name: "RENAME — verify new key does NOT exist"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        if grep -q "^${NEW_KEY}=" "{{ props }}"; then
+          echo "ERROR: New key already exists: $NEW_KEY"; exit 1
+        fi
+      args: { executable: /bin/bash }
+      environment:
+        NEW_KEY: "{{ new_key }}"
+      register: rename_check2
+      failed_when: rename_check2.rc != 0
+      when: op == 'rename'
+
+    - name: "RENAME — replace key (perl -i -ne)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        perl -i -ne '
+          chomp;
+          if (/^\Q$ENV{OLD_KEY}\E=(.*)$/) {
+            print "$ENV{NEW_KEY}=$1\n";
+          } else {
+            print "$_\n";
+          }
+        ' "{{ props }}"
+      args: { executable: /bin/bash }
+      environment:
+        OLD_KEY: "{{ old_key }}"
+        NEW_KEY: "{{ new_key }}"
+      when: op == 'rename'
+
+    # ======================== APPEND ========================
+    - name: "APPEND — write date header + lines"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        DATE=$(date +%Y%m%d)
+        {
+          echo ""
+          echo "##########${DATE}##########"
+        } >> "{{ props }}"
+        while IFS= read -r line; do
+          printf '%s\n' "$line" >> "{{ props }}"
+        done <<< "$APPEND_LINES"
+      args: { executable: /bin/bash }
+      environment:
+        APPEND_LINES: "{{ new_lines | join('\n') }}"
+      when: op == 'append'
+
+    - name: "APPEND — show tail"
+      become: yes
+      become_user: "{{ app }}"
+      shell: "tail -20 '{{ props }}'"
+      args: { executable: /bin/bash }
+      register: append_tail
+      changed_when: false
+      when: op == 'append'
+
+    - name: "APPEND — display"
+      debug:
+        msg: "{{ append_tail.stdout_lines }}"
+      when: op == 'append'
+
+    # ======================== INSERT ========================
+    - name: "INSERT — verify after_line exists once"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        CLEAN_AFTER=$(printf '%s' "$AFTER_LINE" | sed 's/[[:space:]]*$//')
+        COUNT=$(sed 's/[[:space:]]*$//' "{{ props }}" | grep -cxF -- "$CLEAN_AFTER")
+        if [ "$COUNT" -eq 0 ]; then
+          echo "ERROR: Line not found"
+          echo "Searched: $AFTER_LINE"
+          exit 1
+        elif [ "$COUNT" -gt 1 ]; then
+          echo "ERROR: Found $COUNT times (must be 1)"; exit 1
+        fi
+        LINE_NUM=$(awk -v target="$CLEAN_AFTER" '{ line=$0; gsub(/[[:space:]]+$/, "", line); if (line == target) print NR }' "{{ props }}")
+        echo "MATCH: line $LINE_NUM — inserting after"
+      args: { executable: /bin/bash }
+      environment:
+        AFTER_LINE: "{{ after_line }}"
+      register: insert_check
+      failed_when: insert_check.rc != 0
+      when: op == 'insert'
+
+    - name: "INSERT — preview"
+      debug:
+        msg:
+          - "{{ insert_check.stdout }}"
+          - "Inserting: {{ new_lines }}"
+      when: op == 'insert'
+
+    - name: "INSERT — insert after match (perl -i -ne)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: |
+        perl -i -ne '
+          BEGIN { $done = 0; }
+          chomp;
+          print "$_\n";
+          my $trimmed = $_;
+          $trimmed =~ s/\s+$//;
+          my $after_trimmed = $ENV{AFTER_LINE};
+          $after_trimmed =~ s/\s+$//;
+          if ($done == 0 && $trimmed eq $after_trimmed) {
+            foreach my $nl (split /\n/, $ENV{INSERT_LINES}) {
+              print "$nl\n";
+            }
+            $done = 1;
+          }
+        ' "{{ props }}"
+      args: { executable: /bin/bash }
+      environment:
+        AFTER_LINE: "{{ after_line }}"
+        INSERT_LINES: "{{ new_lines | join('\n') }}"
+      when: op == 'insert'
+
+    # ======================== DIFF ========================
+    - name: "DIFF — check backup exists"
+      become: yes
+      become_user: "{{ app }}"
+      stat:
+        path: "{{ backup_file }}"
+      register: bkp_stat
+      when: op == 'diff' or op == 'restore'
+
+    - name: "DIFF — no backup"
+      debug:
+        msg: "No .bkp.ansible found at {{ backup_file }}"
+      when: (op == 'diff' or op == 'restore') and not bkp_stat.stat.exists
+
+    - name: "DIFF — show"
+      become: yes
+      become_user: "{{ app }}"
+      shell: "diff -u '{{ backup_file }}' '{{ props_real }}' || true"
+      args: { executable: /bin/bash }
+      register: diff_result
+      changed_when: false
+      when: op == 'diff' and bkp_stat.stat.exists
+
+    - name: "DIFF — display"
+      debug:
+        msg: "{{ diff_result.stdout_lines | default(['Identical']) }}"
+      when: op == 'diff' and bkp_stat.stat.exists
+
+    # ======================== RESTORE ========================
+    - name: "RESTORE — copy backup over current"
+      become: yes
+      become_user: "{{ app }}"
+      copy:
+        src: "{{ backup_file }}"
+        dest: "{{ props_real }}"
+        remote_src: yes
+        force: yes
+        backup: yes
+      when: op == 'restore' and bkp_stat.stat.exists
+
+    - name: "RESTORE — done"
+      debug:
+        msg: "Restored {{ props_real }} from {{ backup_file }}"
+      when: op == 'restore' and bkp_stat.stat.exists
+
+    # ======================== POST-WRITE ========================
+    - name: "POST — diff (real mode)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: "diff -u '{{ backup_file }}' '{{ props_real }}' || true"
+      args: { executable: /bin/bash }
+      register: post_diff
+      changed_when: false
+      when: op in write_ops and not is_test
+
+    - name: "POST — extract changes for mail"
+      set_fact:
+        changes_only: |-
+          {% for line in post_diff.stdout_lines | default([]) %}
+          {% if line.startswith("-") and not line.startswith("---") %}
+          (old) {{ line }}
+          {% elif line.startswith("+") and not line.startswith("+++") and line.strip() != "+" %}
+          (new) {{ line }}
+          {% endif %}
+          {% endfor %}
+      when: op in write_ops and not is_test
+
+    - name: "POST — display (real mode)"
+      debug:
+        msg: "{{ post_diff.stdout_lines | default(['No differences']) }}"
+      when: op in write_ops and not is_test
+
+    - name: "POST — diff (test mode)"
+      become: yes
+      become_user: "{{ app }}"
+      shell: "diff -u '{{ props_real }}' '{{ props_test }}' || true"
+      args: { executable: /bin/bash }
+      register: test_diff
+      changed_when: false
+      when: op in write_ops and is_test
+
+    - name: "POST — display (test mode)"
+      debug:
+        msg: "{{ test_diff.stdout_lines | default(['No differences']) }}"
+      when: op in write_ops and is_test
+
+    - name: "POST — TEST MODE reminder"
+      debug:
+        msg: "TEST MODE — real file NOT modified. Run without --test to apply."
+      when: op in write_ops and is_test
+
+    # ======================== MAIL (real mode only) ========================
+    - name: "MAIL — record metadata"
+      set_fact:
+        mail_time: "{{ lookup('pipe','date +%Y-%m-%d_%H%M%S_%Z') }}"
+        mail_operator: "{{ lookup('env', 'USER') | default('unknown', true) }}"
+      delegate_to: localhost
+      vars:
+        ansible_python_interpreter: /usr/bin/python
+      become: false
+      run_once: true
+      when: op in write_ops and not is_test
+      ignore_errors: yes
+
+    - name: "MAIL — send properties change notification"
+      vars:
+        ansible_python_interpreter: /usr/bin/python
+      delegate_to: localhost
+      become: false
+      run_once: true
+      mail:
+        host: "{{ mail_host }}"
+        port: 25
+        from: "{{ mail_from }}"
+        to: "{{ mail_to }}"
+        subject: "[PROPERTIES] {{ op | upper }} — {{ inventory_hostname }} — {{ app }} — {{ mail_time }}"
+        subtype: html
+        charset: utf8
+        body: |
+          <html><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#222;">
+
+          <div style="background:#0066cc;color:#fff;padding:12px 16px;font-size:16px;font-weight:bold;">
+            Properties {{ op | upper }}
+          </div>
+
+          <table cellpadding="6" cellspacing="0" border="0"
+                 style="border-collapse:collapse;margin-top:14px;font-size:13px;">
+            <tr><td><b>Host</b></td><td>{{ inventory_hostname }}</td></tr>
+            <tr><td><b>App (user)</b></td><td>{{ app }}</td></tr>
+            <tr><td><b>File</b></td><td>{{ props_real }}</td></tr>
+            <tr><td><b>Operation</b></td><td>{{ op }}</td></tr>
+            <tr><td><b>Operator</b></td><td>{{ mail_operator }}</td></tr>
+            <tr><td><b>Time</b></td><td>{{ mail_time }}</td></tr>
+          </table>
+
+          <h3 style="margin-top:18px;font-size:14px;">Changes (diff):</h3>
+          <pre style="background:#f5f5f5;padding:12px;border:1px solid #ddd;font-size:12px;overflow-x:auto;">{{ changes_only | default('No diff available') }}</pre>
+
+          <p style="margin-top:20px;color:#888;font-size:11px;">
+            Generated by properties.yml automation.
+          </p>
+
+          </body></html>
+      ignore_errors: yes
+      when: op in write_ops and not is_test
+
+    # ======================== UNLOCK ========================
+    - name: "LOCK — release"
+      file:
+        path: "{{ lock_file }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      when: op in write_ops and not is_test
+
+  post_tasks:
+    - name: "LOCK — cleanup on failure"
+      file:
+        path: "{{ lock_file }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      when: op in write_ops and not is_test
+      ignore_errors: yes
