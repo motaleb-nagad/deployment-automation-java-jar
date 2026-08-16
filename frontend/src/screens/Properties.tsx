@@ -91,20 +91,22 @@ export function Properties() {
   const effTest = showTest && testMode;
 
   // Client-side mirror of the wrapper command (for the plan box).
-  const blockPath = `/tmp/props-block-${app || '<app>'}.txt`;
   const hostToken = hosts.join(',') || '<host>';
   const cmd = useMemo(() => {
     const dq = (s: string) => `"${s}"`;
+    const sq = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const blk = block.split(/\r?\n/).filter((l, i, a) => !(l === '' && i === a.length - 1));
+    const inline = blk.map((l) => ` ${sq(l)}`).join('');
     let c = `./properties.sh ${hostToken} ${app || '<app>'} ${op}`;
     if (op === 'preview' && key.trim()) c += ` ${dq(key.trim())}`;
     else if (op === 'update') c += ` ${dq(oldLine)} ${dq(newLine)}`;
     else if (op === 'add_csv' || op === 'remove_csv') c += ` ${dq(key)} ${dq(values)}`;
     else if (op === 'rename') c += ` ${dq(oldKey)} ${dq(newKey)}`;
-    else if (op === 'append') c += ` --file ${blockPath}`;
-    else if (op === 'insert') c += ` ${dq(afterLine)} --file ${blockPath}`;
+    else if (op === 'append') c += inline;
+    else if (op === 'insert') c += ` ${dq(afterLine)}${inline}`;
     if (effTest) c += ' --test';
     return c + (hosts.length > 1 ? '   # per host' : '');
-  }, [hostToken, hosts, app, op, key, oldLine, newLine, values, oldKey, newKey, afterLine, effTest, blockPath]);
+  }, [hostToken, hosts, app, op, key, oldLine, newLine, values, oldKey, newKey, afterLine, block, effTest]);
 
   // Permission the action needs: read-only ops → r; a real edit → x; a test edit → w.
   const permNeeded: 'r' | 'w' | 'x' = !isWrite ? 'r' : effTest ? 'w' : 'x';
@@ -214,8 +216,8 @@ export function Properties() {
               <Field label="NEW LINE"><input value={newLine} onChange={(e) => setNewLine(e.target.value)} placeholder="server.port=10031" style={inp} /></Field>
             </>)}
             {(op === 'add_csv' || op === 'remove_csv') && (<>
-              <Field label="KEY"><input value={key} onChange={(e) => setKey(e.target.value)} placeholder="spring.redis.sentinel.nodes" style={inp} /></Field>
-              <Field label={op === 'add_csv' ? 'VALUE(S) TO ADD (comma-separated)' : 'VALUE(S) TO REMOVE (comma-separated)'}><input value={values} onChange={(e) => setValues(e.target.value)} placeholder="redis4.kpp.com:26379" style={inp} /></Field>
+              <Field label="KEY"><input value={key} onChange={(e) => setKey(e.target.value)} placeholder="retry.status-codes" style={inp} /></Field>
+              <Field label={op === 'add_csv' ? 'VALUE(S) TO ADD (comma-separated)' : 'VALUE(S) TO REMOVE (comma-separated)'}><input value={values} onChange={(e) => setValues(e.target.value)} placeholder="500" style={inp} /></Field>
               <div style={{ fontSize: 11.5, color: 'var(--color-neutral-500)', fontFamily: mono, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
                 <span style={{ fontFamily: 'var(--font-heading)', letterSpacing: '.06em' }}>EXAMPLE</span>
                 {op === 'add_csv' ? (<>
@@ -237,11 +239,11 @@ export function Properties() {
               <Field label="AFTER LINE (block is inserted right after this existing line)"><input value={afterLine} onChange={(e) => setAfterLine(e.target.value)} placeholder="http.client.route.ias.max-per-route-connections=200" style={inp} /></Field>
             )}
             {isBlock && (
-              <Field label={`BLOCK — paste the lines to ${op} (saved to a file on the server, previous removed)`}>
+              <Field label={`BLOCK — paste the lines to ${op} (appended directly; the file is backed up first)`}>
                 <textarea value={block} onChange={(e) => setBlock(e.target.value)} rows={9} spellCheck={false}
                   placeholder={'##################### MPGS #############################\nbds.disbursement.retry.max-count=10\nbds.disbursement.retry.delay-in-millisec=30000'}
                   style={{ ...inp, resize: 'vertical', lineHeight: 1.5, whiteSpace: 'pre', overflowWrap: 'normal', overflowX: 'auto' }} />
-                <div style={{ fontSize: 10.5, color: 'var(--color-neutral-500)', marginTop: 4, fontFamily: mono }}>{blockLineCount} line(s) → {blockPath}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--color-neutral-500)', marginTop: 4, fontFamily: mono }}>{blockLineCount} line(s) · no temp file — {op === 'insert' ? 'inserted after the matched line' : 'appended at end of file'}</div>
               </Field>
             )}
           </div>

@@ -5,12 +5,10 @@ import com.nagad.deploy.dto.Dtos.PropertiesRequest;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 
 /**
@@ -79,8 +77,11 @@ public class PropertiesRunner {
             case "update" -> sb.append(' ').append(dq(r.oldLine())).append(' ').append(dq(r.newLine()));
             case "add_csv", "remove_csv" -> sb.append(' ').append(dq(r.key())).append(' ').append(dq(r.values()));
             case "rename" -> sb.append(' ').append(dq(r.oldKey())).append(' ').append(dq(r.newKey()));
-            case "append" -> sb.append(" --file ").append(blockPath);
-            case "insert" -> sb.append(' ').append(dq(r.afterLine())).append(" --file ").append(blockPath);
+            case "append" -> { for (String l : blockLines(r.block())) sb.append(' ').append(shq(l)); }
+            case "insert" -> {
+                sb.append(' ').append(dq(r.afterLine()));
+                for (String l : blockLines(r.block())) sb.append(' ').append(shq(l));
+            }
             default -> { /* diff | restore — no args */ }
         }
         if (r.testMode()) sb.append(" --test");
@@ -109,13 +110,6 @@ public class PropertiesRunner {
 
         List<String> block = blockLines(r.block());
         String stamp = STAMP.format(LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant());
-
-        // Block is staged once on the ops host, then reused for every target host.
-        if (BLOCK_OPS.contains(op)) {
-            out.add(line("task", stars("TASK [stage pasted block on server]")));
-            out.add(line("ch", "staged " + block.size() + " line(s) → " + blockPath
-                    + " (removed previous, created fresh)"));
-        }
 
         for (String host : hosts) {
             perHost(out, host, r, changed, block, stamp);
@@ -248,36 +242,18 @@ public class PropertiesRunner {
     // ---- real execution (production) --------------------------------------------------------
 
     /**
-     * SSH to the jump host and run the real wrapper once per selected host. For a block op the
-     * pasted lines are staged to {@link #blockFilePath} first — a prior file removed and a fresh
-     * one created (base64 on the wire so arbitrary property text can't break the shell) — then
-     * reused with {@code --file} for every host. Returns the classified console output.
+     * SSH to the jump host and run the real wrapper once per selected host. Block ops
+     * (append/insert) pass their pasted lines inline as single-quoted arguments — no temp file
+     * is staged on, or left behind on, the server. {@code properties.yml} backs up the live file
+     * (to {@code .bkp.ansible} plus a timestamped copy) before it writes. Returns the classified
+     * console output.
      */
     public List<PropTermLine> execute(PropertiesRequest r) throws IOException, InterruptedException {
-        String blockPath = blockFilePath(r.app());
         String wd = shq(ansible.workingDir());
         List<PropTermLine> out = new ArrayList<>();
 
-        // Stage the pasted block once on the ops host, reused for every target host.
-        if (BLOCK_OPS.contains(r.op())) {
-            String b64 = Base64.getEncoder().encodeToString(
-                    String.join("\n", blockLines(r.block())).getBytes(StandardCharsets.UTF_8));
-            String stage = "cd " + wd + " && rm -f " + shq(blockPath)
-                    + " && printf %s " + shq(b64) + " | base64 -d > " + shq(blockPath)
-                    + " && echo staged " + shq(blockPath);
-            out.add(line("task", "TASK [stage pasted block on server]"));
-            try {
-                ansible.capture(stage, 60);
-                out.add(line("ch", "staged " + blockLines(r.block()).size() + " line(s) → " + blockPath));
-            } catch (IOException | InterruptedException e) {
-                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-                out.add(line("fatal", "failed to stage block: " + e.getMessage()));
-                throw e;
-            }
-        }
-
         for (String host : r.hosts()) {
-            String cmd = command(host, r, blockPath);
+            String cmd = command(host, r, null);
             out.add(line("user", "$ " + cmd));
             String remote = "cd " + wd + " && " + cmd;
             String raw = ansible.capture(remote, 120);

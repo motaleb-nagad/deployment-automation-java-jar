@@ -99,7 +99,7 @@ public class StgPropertiesService {
         String cmd = runner.command(host, req, blockPath);
         recordHistory(actor.username(), group, host, app, op, test, cmd);
 
-        String savedBlock = StgPropertiesRunner.BLOCK_OPS.contains(op) ? blockPath : null;
+        String savedBlock = null; // block ops now pass lines inline — no temp file is staged
         return new StgPropertiesResult(cmd, host, StgPropertiesRunner.cfgFile(app),
                 StgPropertiesRunner.backupFile(app), test, changed, savedBlock, lines);
     }

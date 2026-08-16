@@ -5,12 +5,10 @@ import com.nagad.deploystg.dto.Dtos.StgPropertiesRequest;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 
 /**
@@ -58,8 +56,11 @@ public class StgPropertiesRunner {
             case "update" -> sb.append(' ').append(dq(r.oldLine())).append(' ').append(dq(r.newLine()));
             case "add_csv", "remove_csv" -> sb.append(' ').append(dq(r.key())).append(' ').append(dq(r.values()));
             case "rename" -> sb.append(' ').append(dq(r.oldKey())).append(' ').append(dq(r.newKey()));
-            case "append" -> sb.append(" --file ").append(blockPath);
-            case "insert" -> sb.append(' ').append(dq(r.afterLine())).append(" --file ").append(blockPath);
+            case "append" -> { for (String l : blockLines(r.block())) sb.append(' ').append(shq(l)); }
+            case "insert" -> {
+                sb.append(' ').append(dq(r.afterLine()));
+                for (String l : blockLines(r.block())) sb.append(' ').append(shq(l));
+            }
             default -> { /* diff | restore */ }
         }
         if (r.testMode()) sb.append(" --test");
@@ -86,11 +87,6 @@ public class StgPropertiesRunner {
 
         List<String> block = blockLines(r.block());
         String stamp = STAMP.format(LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant());
-
-        if (BLOCK_OPS.contains(op)) {
-            out.add(line("task", stars("TASK [stage pasted block on server]")));
-            out.add(line("ch", "staged " + block.size() + " line(s) → " + blockPath + " (removed previous, created fresh)"));
-        }
 
         out.add(line("ink", stars("PLAY [properties — " + host + "]")));
         out.add(line("task", stars("TASK [GUARD — app / op / file exist]")));
@@ -187,21 +183,12 @@ public class StgPropertiesRunner {
     // ---- real execution ---------------------------------------------------------------------
 
     public List<StgPropTermLine> execute(String host, StgPropertiesRequest r) throws IOException, InterruptedException {
-        String blockPath = blockFilePath(r.app());
         String wd = shq(ansible.stgDir());
         List<StgPropTermLine> out = new ArrayList<>();
 
-        if (BLOCK_OPS.contains(r.op())) {
-            String b64 = Base64.getEncoder().encodeToString(
-                    String.join("\n", blockLines(r.block())).getBytes(StandardCharsets.UTF_8));
-            String stage = "cd " + wd + " && rm -f " + shq(blockPath)
-                    + " && printf %s " + shq(b64) + " | base64 -d > " + shq(blockPath) + " && echo staged " + shq(blockPath);
-            out.add(line("task", "TASK [stage pasted block on server]"));
-            ansible.capture(stage, 60);
-            out.add(line("ch", "staged " + blockLines(r.block()).size() + " line(s) → " + blockPath));
-        }
-
-        String cmd = command(host, r, blockPath);
+        // Block ops (append/insert) pass their pasted lines inline as single-quoted args — no
+        // temp file is staged or left on the server. properties.yml backs up the live file first.
+        String cmd = command(host, r, null);
         out.add(line("user", "$ " + cmd));
         String raw = ansible.capture("cd " + wd + " && " + cmd, 120);
         for (String l : raw.split("\n", -1)) out.add(classify(l));
